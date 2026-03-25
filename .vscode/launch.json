@@ -1,0 +1,1 @@
+{"version":"0.2.0","configurations":[{"name":"Python: 鍚庣鏈嶅姟","type":"debugpy","request":"launch","module":"uvicorn","args":["pservice.main:app","--host","127.0.0.1","--port","8765"],"cwd":"${workspaceFolder}","console":"integratedTerminal","justMyCode":false,"env":{"PYTHONPATH":"${workspaceFolder}"},"description":"鍚姩 Python FastAPI 鍚庣鏈嶅姟"}]}

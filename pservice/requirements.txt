@@ -1,0 +1,16 @@
+# OfficeHelper Python Service 依赖
+# 与 OfficeHelper 主程序共享 core/ 模块，仅新增 web 框架
+
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+
+# 以下来自主项目 requirements.txt（复用）
+# customtkinter>=5.2.0
+# pywin32>=306
+# openai>=1.0.0
+# anthropic>=0.3.0
+# requests>=2.31.0
+# Pillow>=10.0.0
+# python-dotenv>=1.0.0
+# PyYAML>=6.0.1

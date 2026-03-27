@@ -29,8 +29,10 @@ from typing import Any, Optional
 
 # ── 路径常量 ────────────────────────────────────────────────────────────
 
-_CONFIG_DIR = Path.home() / ".office_helper"
-_CONFIG_FILE = _CONFIG_DIR / "config.json"
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+_CONFIG_DIR = _PROJECT_ROOT
+_CONFIG_FILE = _PROJECT_ROOT / "config.json"
+_FALLBACK_CONFIG_FILE = Path.home() / ".office_helper" / "config.json"
 
 # config.json 不存在时写入的默认内容
 _DEFAULT_CONFIG = {
@@ -90,22 +92,47 @@ class Settings:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     def _load_config(self):
-        """从 config.json 加载配置；文件不存在则写入默认配置。"""
+        """
+        加载配置，按以下优先级查找：
+          1. 项目根目录 config.json（优先）
+          2. ~/.office_helper/config.json（迁移兼容）
+          3. 均不存在 → 写入默认配置到项目根目录
+        """
+        # 项目根目录已有 → 直接加载
+        if _CONFIG_FILE.exists():
+            self._ensure_dir()
+            try:
+                with open(_CONFIG_FILE, 'r', encoding='utf-8-sig') as f:
+                    self._config = json.load(f)
+                return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"[Settings] 项目根目录 config.json 读取失败: {e}，尝试备选路径")
+                # 继续走下面的备选逻辑
+
+        # 项目根目录没有 → 尝试用户目录（迁移兼容）
+        if _FALLBACK_CONFIG_FILE.exists():
+            try:
+                with open(_FALLBACK_CONFIG_FILE, 'r', encoding='utf-8-sig') as f:
+                    self._config = json.load(f)
+                print(f"[Settings] 从 {_FALLBACK_CONFIG_FILE} 加载配置，并迁移到项目根目录")
+                # 立即写回项目根目录，保持路径一致性
+                self._ensure_dir()
+                with open(_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self._config, f, ensure_ascii=False, indent=2)
+                return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"[Settings] 用户目录 config.json 读取失败: {e}，使用默认配置")
+
+        # 全部没有 → 写入默认配置到项目根目录
+        self._config = _DEFAULT_CONFIG.copy()
+        self._deep_copy_dicts(self._config)
         self._ensure_dir()
-
-        if not _CONFIG_FILE.exists():
-            self._config = _DEFAULT_CONFIG.copy()
-            self._deep_copy_dicts(self._config)
-            self.save_config()
-            return
-
         try:
-            with open(_CONFIG_FILE, 'r', encoding='utf-8-sig') as f:
-                self._config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"[Settings] config.json 读取失败: {e}，使用默认配置")
-            self._config = _DEFAULT_CONFIG.copy()
-            self._deep_copy_dicts(self._config)
+            with open(_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self._config, f, ensure_ascii=False, indent=2)
+            print(f"[Settings] 未找到配置文件，已在 {_CONFIG_FILE} 生成默认配置")
+        except IOError as e:
+            print(f"[Settings] 写入默认配置失败: {e}")
 
     @staticmethod
     def _deep_copy_dicts(d: dict) -> dict:
@@ -123,7 +150,7 @@ class Settings:
         从指定路径重新加载配置，替换内存中的全部配置。
 
         Args:
-            config_path: 配置文件路径，默认为 ~/.office_helper/config.json
+            config_path: 配置文件路径，默认为项目根目录的 config.json
 
         Returns:
             加载后的完整配置字典
@@ -148,7 +175,7 @@ class Settings:
         将当前配置保存到 config.json。
 
         Args:
-            config_path: 配置文件路径，默认为 ~/.office_helper/config.json
+            config_path: 配置文件路径，默认为项目根目录的 config.json
 
         Returns:
             bool: 保存是否成功

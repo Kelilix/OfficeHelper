@@ -7,12 +7,16 @@ import json
 import base64
 import io
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
 
 from core.settings import settings
+
+# 每个会话最多保留的对话轮次（用户+助手=1轮），超过则裁剪最老的半轮
+MAX_HISTORY_TURNS = 200
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,42 @@ class ChatMessage:
             'content': self.content,
             'image': self.image
         }
+
+
+@dataclass
+class TurnRecord:
+    """
+    单轮对话记录。
+
+    注意：JSON 格式中引号做了转义，存储的是 LLM 返回的原始 JSON 字符串，
+    这样前端可以直接展示或再次解析。
+    """
+    turn: int           # 从 1 开始的轮次编号
+    role: str            # "user" | "assistant"
+    content: str         # 原始内容（用户需求 / LLM 回复）
+    action: str = ""     # 解析出的 action JSON 字符串（如 `{"action":"set_font","params":...}`）
+    description: str = ""# 操作描述
+
+    def to_dict(self) -> dict:
+        return {
+            "轮次": self.turn,
+            "角色": self.role,
+            "内容": self.content,
+            "action": self.action,
+            "描述": self.description,
+        }
+
+    def to_user_json(self) -> dict:
+        """
+        转换为用户要求的格式：
+        用户轮次: {"轮次": N, "用户需求": "...", "回答": ""}
+        助手轮次: {"轮次": N, "用户需求": "", "回答": "..."}
+        """
+        if self.role == "user":
+            return {"轮次": self.turn, "用户需求": self.content, "回答": ""}
+        else:
+            # 回答字段存放 LLM 的完整原始回复
+            return {"轮次": self.turn, "用户需求": "", "回答": self.content}
 
 
 @dataclass
@@ -361,12 +401,23 @@ class QwenProvider(BaseLLMProvider):
 
 
 class LLMService:
-    """大模型服务，配置全部来自 config.json"""
+    """
+    大模型服务，配置全部来自 config.json。
+
+    会话管理：
+    - 每个 session_id 对应独立的对话历史（多窗口隔离）
+    - 线程安全（threading.Lock），可被 FastAPI 多 worker 并发调用
+    - 历史上限 MAX_HISTORY_TURNS，超出时裁剪最老的半轮
+    """
 
     def __init__(self):
         self._provider: Optional[BaseLLMProvider] = None
         self._current_provider_type = None
-        self._chat_history: List[ChatMessage] = []
+
+        # 新增：按 session_id 隔离的多轮对话历史
+        # 结构：Dict[session_id, List[TurnRecord]]
+        self._sessions: Dict[str, List[TurnRecord]] = {}
+        self._sessions_lock = threading.Lock()
 
         self._system_prompt = """你是一个专业的Word文档格式调整助手。
 你的任务是帮助用户分析和修复Word文档的格式问题。
@@ -380,11 +431,64 @@ class LLMService:
 
         self._init_provider()
 
+    # ── 会话管理（线程安全）───────────────────────────────────────────
+
+    def _get_session(self, session_id: str) -> List[TurnRecord]:
+        """线程安全地获取（或创建）指定 session_id 的历史记录列表。"""
+        with self._sessions_lock:
+            if session_id not in self._sessions:
+                self._sessions[session_id] = []
+            return self._sessions[session_id]
+
+    def _trim_history(self, records: List[TurnRecord]) -> List[TurnRecord]:
+        """若记录超量，裁剪最老的半轮（user+assistant 成对裁剪）。"""
+        if len(records) <= MAX_HISTORY_TURNS * 2:
+            return records
+        # 保留最新的 MAX_HISTORY_TURNS * 2 条（保留整数对）
+        kept = records[-(MAX_HISTORY_TURNS * 2):]
+        logger.warning(
+            "[Session] 历史超限，已裁剪至最近 %d 条记录（最大轮次=%s）",
+            len(kept),
+            records[-1].turn if records else "?",
+        )
+        return kept
+
+    def _build_history_json(self, records: List[TurnRecord]) -> str:
+        """
+        将会话历史转换为用户要求的 JSON 格式：
+        [{"轮次":1,"用户需求":"...","回答":"..."}, {"轮次":1,"用户需求":"","回答":"..."}, ...]
+        """
+        return json.dumps(
+            [r.to_user_json() for r in records],
+            ensure_ascii=False,
+        )
+
+    def get_session_history(self, session_id: str) -> List[dict]:
+        """返回指定 session 的历史（JSON 格式列表），供前端展示。"""
+        with self._sessions_lock:
+            records = self._sessions.get(session_id, [])
+            return [r.to_user_json() for r in records]
+
+    def clear_session(self, session_id: str) -> bool:
+        """清空指定 session 的对话历史，返回是否真的清掉了。"""
+        with self._sessions_lock:
+            if session_id in self._sessions:
+                del self._sessions[session_id]
+                return True
+            return False
+
+    def clear_all_sessions(self):
+        """清空所有会话（服务重启时调用）。"""
+        with self._sessions_lock:
+            self._sessions.clear()
+
     # ── LLM 请求 / 响应日志 ─────────────────────────────────────────────
 
     def _log_request(self, messages: List[ChatMessage], tag: str):
         """
         打印发送给大模型的完整请求内容。
+        - SYSTEM 消息：只截取 "## 对话历史" 之前的固定前缀，让用户能在日志里看到历史部分的完整 JSON
+        - USER / ASSISTANT 消息：常规截断
         """
         model = getattr(self._provider, "model", "?")
         base_url = getattr(self._provider, "base_url", "?")
@@ -398,10 +502,25 @@ class LLMService:
             role = msg.role.upper()
             content = msg.content
             has_image = " [含图片]" if msg.image else ""
-            # 始终截断避免日志过长，但保留足够信息用于分析
-            if len(content) > 800:
-                content = content[:800] + f"\n... [共 {len(content)} 字符，已截断]"
-            logger.info("  [%d] %s:%s%s", i, role, content, has_image)
+
+            if role == "SYSTEM":
+                # system 内容可能很长（含完整历史 JSON），单独打印历史部分
+                if "## 对话历史" in content:
+                    idx = content.index("## 对话历史")
+                    history_part = content[idx:]          # 历史 JSON 部分不过截断
+                    prefix_part = content[:idx]           # 固定前缀截断即可
+                    logger.info("  [%d] %s:%s\n  ... 历史 JSON ...\n%s",
+                                i, role, prefix_part, history_part)
+                else:
+                    # 无历史时（首次对话），完整打印
+                    if len(content) > 800:
+                        content = content[:800] + f"\n... [共 {len(content)} 字符，已截断]"
+                    logger.info("  [%d] %s:%s%s", i, role, content, has_image)
+            else:
+                # USER / ASSISTANT 消息常规截断
+                if len(content) > 800:
+                    content = content[:800] + f"\n... [共 {len(content)} 字符，已截断]"
+                logger.info("  [%d] %s:%s%s", i, role, content, has_image)
 
         logger.info(sep)
 
@@ -519,27 +638,94 @@ class LLMService:
             self._log_response(response, tag="chat")
         return response
 
-    def chat_with_context(self, user_message: str, system_context: str, stream: bool = False) -> str:
+    def chat_with_context(
+        self,
+        user_message: str,
+        system_context: str,
+        stream: bool = False,
+        session_id: str = "default",
+    ) -> str:
         """
-        带完整上下文的聊天（供 API 路由使用）。
+        带完整上下文 + 多轮对话历史的聊天（供 API 路由使用）。
 
         Args:
             user_message: 用户的实际消息
             system_context: 完整的系统上下文（包含选区、技能描述等）
             stream: 是否流式输出
+            session_id: 会话 ID，用于隔离不同 Word 窗口的对话历史
 
         Returns:
-            str: 助手回复
+            str: 助手回复（JSON action 数组的原始文本）
         """
-        self._chat_history.clear()
-        self._chat_history.append(ChatMessage(role="system", content=system_context))
-        self._chat_history.append(ChatMessage(role="user", content=user_message))
-        self._log_request(self._chat_history, tag="chat_with_context")
-        response = self._call_provider_chat(self._chat_history, stream, tag="chat_with_context")
+        records = self._get_session(session_id)
+
+        # 计算本轮编号（每有一对 user+assistant，轮次+1）
+        next_turn = (len(records) // 2) + 1
+
+        # 构建发给大模型的消息列表
+        # 1. system prompt（含对话历史 + 当前技能上下文）
+        history_json = self._build_history_json(records)
+        full_system = (
+            system_context
+            + f"\n\n## 对话历史\n以下是你与用户之前的对话记录：\n{history_json}\n"
+        )
+
+        messages_for_llm: List[ChatMessage] = [
+            ChatMessage(role="system", content=full_system),
+            ChatMessage(role="user", content=user_message),
+        ]
+
+        self._log_request(messages_for_llm, tag=f"chat_with_context[sid={session_id}]")
+
+        response = self._call_provider_chat(
+            messages_for_llm, stream, tag=f"chat_with_context[sid={session_id}]"
+        )
+
         if not stream:
-            self._chat_history.append(ChatMessage(role="assistant", content=response))
-            self._log_response(response, tag="chat_with_context")
+            self._log_response(response, tag=f"chat_with_context[sid={session_id}]")
+
+            # 解析 action description（用于日志/记录）
+            action_desc = self._extract_action_description(response)
+
+            # 追加用户轮和助手轮到历史
+            records.append(
+                TurnRecord(turn=next_turn, role="user", content=user_message)
+            )
+            records.append(
+                TurnRecord(
+                    turn=next_turn,
+                    role="assistant",
+                    content=response,
+                    action=response,          # 存完整原始回复
+                    description=action_desc,  # 存解析后的操作摘要
+                )
+            )
+
+            # 裁剪超量历史
+            trimmed = self._trim_history(records)
+            with self._sessions_lock:
+                self._sessions[session_id] = trimmed
+
         return response
+
+    def _extract_action_description(self, llm_response: str) -> str:
+        """从 LLM 响应中提取操作描述，用于记录。"""
+        try:
+            import re
+            match = re.search(r'\[.*\]', llm_response, re.DOTALL)
+            if match:
+                actions = json.loads(match.group())
+                if isinstance(actions, list):
+                    descs = [
+                        a.get("description", a.get("action", "?"))
+                        for a in actions
+                        if isinstance(a, dict)
+                    ]
+                    if descs:
+                        return " | ".join(descs)
+        except Exception:
+            pass
+        return ""
 
     def analyze_image(self, image_data: str, user_request: str = "") -> AnalysisResult:
         """
@@ -633,13 +819,33 @@ class LLMService:
             return self._provider.list_models()
         return []
 
-    def clear_history(self):
-        """清空聊天历史"""
-        self._chat_history = []
+    def clear_history(self, session_id: Optional[str] = None):
+        """
+        清空聊天历史。
 
-    def get_history(self) -> List[dict]:
-        """获取聊天历史"""
-        return [msg.to_dict() for msg in self._chat_history]
+        Args:
+            session_id: 若不传，则清空所有会话；若传入，则只清指定会话。
+        """
+        if session_id:
+            self.clear_session(session_id)
+        else:
+            self.clear_all_sessions()
+
+    def get_history(self, session_id: str = "") -> List[dict]:
+        """
+        获取聊天历史。
+
+        Args:
+            session_id: 若传入，返回指定会话；若为空，返回所有会话合并的扁平列表。
+        """
+        if session_id:
+            return self.get_session_history(session_id)
+        # 无 session_id 时返回所有会话的汇总（供管理接口使用）
+        with self._sessions_lock:
+            all_records = []
+            for sid, records in self._sessions.items():
+                all_records.extend([r.to_user_json() for r in records])
+            return all_records
 
     @property
     def current_provider(self) -> str:

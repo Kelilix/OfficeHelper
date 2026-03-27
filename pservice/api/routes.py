@@ -4,12 +4,15 @@ AI 聊天路由
 
 import re
 import json
+import logging
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .service import word_service, llm_service
 from skills import get_skill_descriptions
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -43,6 +46,12 @@ def chat(req: ChatRequest) -> ChatResponse:
     核心接口：接收用户消息 + 选中文本，调用 LLM 分析意图并执行 Word 操作。
     """
     try:
+        logger.info(
+            "[/api/chat] 收到请求 | message_len=%d selection_len=%d doc=%r",
+            len(req.message or ""),
+            len(req.selection_text or ""),
+            req.document_name or "",
+        )
         # 实时刷新选区（来自 Word）
         current_selection = req.selection_text
         if not current_selection:
@@ -67,9 +76,11 @@ def chat(req: ChatRequest) -> ChatResponse:
         # 生成自然语言摘要
         summary = _summarize_execution(llm_response, executed)
 
+        logger.info("[/api/chat] 成功 | actions=%d", len(actions))
         return ChatResponse(response=summary, success=True)
 
     except Exception as e:
+        logger.exception("[/api/chat] 失败: %s", e)
         return ChatResponse(response=f"处理失败：{str(e)}", success=False, error=str(e))
 
 

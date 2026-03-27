@@ -5,9 +5,17 @@ FastAPI HTTP API，供 Word Web 加载项调用
 
 import sys
 import os
+import logging
 
 # 将项目根目录加入路径，以便导入 core/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# 控制台输出应用与 core 模块的 INFO 日志（含 LLM 请求/错误）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 from api import app
 from api.routes import router as api_router

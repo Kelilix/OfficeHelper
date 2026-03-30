@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 import base64
 import io
 import logging
@@ -57,6 +58,7 @@ class TurnRecord:
     content: str         # 原始内容（用户需求 / LLM 回复）
     action: str = ""     # 解析出的 action JSON 字符串（如 `{"action":"set_font","params":...}`）
     description: str = ""# 操作描述
+    executed: Any = ""   # 执行结果 list（如 `[{"action":"set_font_size","before_state":"..."}]`），直接存 list 不转 JSON
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +67,7 @@ class TurnRecord:
             "内容": self.content,
             "action": self.action,
             "描述": self.description,
+            "执行结果": json.dumps(self.executed, ensure_ascii=False) if isinstance(self.executed, list) else self.executed,
         }
 
     def to_user_json(self) -> dict:
@@ -73,11 +76,14 @@ class TurnRecord:
         用户轮次: {"轮次": N, "用户需求": "...", "回答": ""}
         助手轮次: {"轮次": N, "用户需求": "", "回答": "..."}
         """
-        if self.role == "user":
-            return {"轮次": self.turn, "用户需求": self.content, "回答": ""}
-        else:
-            # 回答字段存放 LLM 的完整原始回复
-            return {"轮次": self.turn, "用户需求": "", "回答": self.content}
+        role_map = {"user": "用户需求", "assistant": "回答"}
+        key = role_map.get(self.role, "内容")
+        return {
+            "轮次": self.turn,
+            key: self.content,
+            "描述": self.description,
+            "执行结果": json.dumps(self.executed, ensure_ascii=False) if isinstance(self.executed, list) else self.executed,
+        }
 
 
 @dataclass
@@ -455,13 +461,62 @@ class LLMService:
 
     def _build_history_json(self, records: List[TurnRecord]) -> str:
         """
-        将会话历史转换为用户要求的 JSON 格式：
-        [{"轮次":1,"用户需求":"...","回答":"..."}, {"轮次":1,"用户需求":"","回答":"..."}, ...]
+        将会话历史转换为结构化文本，供 LLM 理解历史上下文。
+        格式（按轮次组织）：
+          第N轮
+            【用户要求】...
+            【助手决定】...
+            【执行结果】✅/❌
+              操作: action_name(描述)
+              初始状态: font/paragraph/border/...（仅当有before_state时）
+
+        关键设计：初始状态由 action -> capture 映射自动捕获，
+        不会把字体状态和段落状态混淆给 LLM（set_font_size 捕获字体状态，
+        set_line_spacing 捕获段落状态）。
         """
-        return json.dumps(
-            [r.to_user_json() for r in records],
-            ensure_ascii=False,
-        )
+        if not records:
+            return "(无历史记录)"
+
+        parts = []
+        i = 0
+        while i < len(records):
+            r = records[i]
+            if r.role != "user":
+                i += 1
+                continue
+            turn = r.turn
+            parts.append(f"第{turn}轮")
+            parts.append(f"  【用户要求】{r.content}")
+
+            # 找对应的 assistant 记录
+            if i + 1 < len(records) and records[i + 1].role == "assistant":
+                asst = records[i + 1]
+                # 去掉 LLM 回复中的 markdown 代码包裹
+                llm_decision = re.sub(r'^```json\s*', '', asst.content.strip(), flags=re.MULTILINE)
+                llm_decision = re.sub(r'\s*```$', '', llm_decision, flags=re.MULTILINE)
+                parts.append(f"  【助手决定】{llm_decision}")
+
+                # 解析执行结果（包含初始状态，executed 直接是 list 不需要 json.loads）
+                if isinstance(asst.executed, list):
+                    try:
+                        for e in asst.executed:  # 直接是 list
+                            bs = e.get("before_state", "")
+                            act = e.get("action", "?")
+                            desc = e.get("description", "")
+                            succ = "✅" if e.get("success") else "❌"
+                            err = f" 错误: {e['error']}" if e.get("error") else ""
+                            if bs:
+                                parts.append(f"  【执行结果】{succ}")
+                                parts.append(f"    操作: {act}({desc})")
+                                parts.append(f"    初始状态: {bs}")
+                                if err:
+                                    parts.append(f"    {err}")
+                            else:
+                                parts.append(f"  【执行结果】{succ}{err}")
+                    except Exception:
+                        pass
+            i += 1
+        return "\n".join(parts)
 
     def get_session_history(self, session_id: str) -> List[dict]:
         """返回指定 session 的历史（JSON 格式列表），供前端展示。"""
@@ -477,7 +532,19 @@ class LLMService:
                 return True
             return False
 
-    def clear_all_sessions(self):
+    def update_executed_result(self, session_id: str, executed: list) -> bool:
+        """
+        将执行结果写入最近一条 assistant 记录，供下一轮对话上下文使用。
+        直接存 list（不转 JSON string），`_build_history_json` 直接取用。
+        """
+        with self._sessions_lock:
+            records = self._sessions.get(session_id, [])
+            if not records:
+                return False
+            if records[-1].role == "assistant":
+                records[-1].executed = executed  # 直接存 list，不转 JSON string
+                return True
+            return False
         """清空所有会话（服务重启时调用）。"""
         with self._sessions_lock:
             self._sessions.clear()
@@ -504,6 +571,28 @@ class LLMService:
             has_image = " [含图片]" if msg.image else ""
 
             if role == "SYSTEM":
+                # chat_with_context（Round 2）system 消息包含完整 SKILL.md，
+                # 日志里省略 skill 内容，仅保留结构提示，不影响实际发给 LLM 的内容。
+                if "chat_with_context" in tag and "## 技能「" in content:
+                    # 找技能说明书段落的起始行
+                    idx_skill_start = content.rfind("## 技能「")
+                    idx_task = content.find("## 你的任务")
+                    # 打印结构框架 + 占位
+                    if idx_task > 0 and idx_skill_start >= 0:
+                        before = content[:idx_skill_start]
+                        after = content[idx_task:]
+                        logged = before + f"## 技能「xxx」的完整说明书\n[... 已省略，完整内容仍会发给 LLM ...]\n\n" + after
+                    else:
+                        logged = content
+                    # 对话历史部分单独附上（不省略）
+                    if "## 对话历史" in logged:
+                        idx_hist = logged.index("## 对话历史")
+                        logger.info("  [%d] %s:\n%s\n  ... (SKILL.md 已省略) ...\n%s",
+                                    i, role, logged[:idx_hist], logged[idx_hist:])
+                    else:
+                        logger.info("  [%d] %s:\n%s", i, role, logged[:1500])
+                    continue
+
                 # system 内容可能很长（含完整历史 JSON），单独打印历史部分
                 if "## 对话历史" in content:
                     idx = content.index("## 对话历史")

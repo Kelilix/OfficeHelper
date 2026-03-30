@@ -10,8 +10,11 @@ const useStyles = makeStyles({
   root: {
     display: "flex",
     flexDirection: "column",
+    flex: 1,
+    minHeight: 0,
     height: "100%",
-    minHeight: "100%",
+    maxHeight: "100%",
+    overflow: "hidden",
     backgroundColor: tokens.colorNeutralBackground1,
   },
   header: {

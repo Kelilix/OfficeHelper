@@ -26,11 +26,13 @@ const useStyles = makeStyles({
   messages: {
     flex: 1,
     overflowY: "auto",
+    overflowX: "hidden",
     padding: "12px 16px",
     display: "flex",
     flexDirection: "column",
     gap: "12px",
     minHeight: 0,
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   messageRow: {
     display: "flex",
@@ -51,7 +53,8 @@ const useStyles = makeStyles({
   },
   bubbleUser: {
     backgroundColor: tokens.colorBrandBackground,
-    color: tokens.colorBrandForeground1,
+    // 品牌背景上须用 OnBrand 前景；BrandForeground1 是「品牌色字在浅底上」，易与背景撞色看不见
+    color: tokens.colorNeutralForegroundOnBrand,
     borderBottomRightRadius: "4px",
   },
   bubbleAssistant: {
@@ -71,11 +74,13 @@ const useStyles = makeStyles({
     paddingLeft: "34px",
   },
   inputArea: {
+    flexShrink: 0,
     padding: "12px 16px",
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     display: "flex",
     flexDirection: "column",
     gap: "8px",
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   inputRow: {
     display: "flex",

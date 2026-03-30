@@ -112,16 +112,9 @@ class SkillLoader:
         return "\n".join(parts)
 
 
-# 全局 Skill 加载器
-_loader: Optional[SkillLoader] = None
-
-
 def get_skill_loader() -> SkillLoader:
-    """获取全局 Skill 加载器"""
-    global _loader
-    if _loader is None:
-        _loader = SkillLoader()
-    return _loader
+    """获取 Skill 加载器（每次返回新实例，确保实时反映 skills 目录变化）。"""
+    return SkillLoader()
 
 
 def list_available_skills() -> List[Dict[str, str]]:

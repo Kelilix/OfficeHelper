@@ -13,7 +13,17 @@ const root = rootElement ? createRoot(rootElement) : undefined;
 /* Render application after Office initializes */
 Office.onReady(() => {
   root?.render(
-    <FluentProvider theme={webLightTheme}>
+    <FluentProvider
+      theme={webLightTheme}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       <App title={title} />
     </FluentProvider>
   );

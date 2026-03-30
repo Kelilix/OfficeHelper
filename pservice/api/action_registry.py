@@ -206,8 +206,11 @@ def _h_find(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any
         whole_word=params.get("whole_word", False),
         match_case=params.get("match_case", False),
     )
-    return {"success": rng is not None,
-            "result": {"start": rng.Start, "end": rng.End, "text": rng.Text} if rng else None}
+    result = {
+        "success": rng is not None,
+        "result": {"start": rng.Start, "end": rng.End, "text": rng.Text} if rng else None
+    }
+    return result
 
 
 def _h_count_occurrences(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
@@ -269,9 +272,15 @@ def _h_wrap_with_bookmarks(action: Dict, params: Dict, op: "WordTextOperator") -
 
 def _h_insert_text(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
     rng = _resolve_rng(op, params.get("rng", ""))
-    before = params.get("before", True)
-    op.insert_text(rng, params.get("text", ""), before=before)
-    return {"success": True}
+    before_state_raw = _capture_state(STATE_CONTENT, rng, op)
+    before_state_text = _human_readable_state(STATE_CONTENT, before_state_raw) if before_state_raw else ""
+    op.insert_text(rng, params.get("text", ""), before=params.get("before", True))
+    result = {"success": True}
+    if before_state_text:
+        result["before_state"] = before_state_text
+    if before_state_raw:
+        result["before_state_raw"] = before_state_raw
+    return result
 
 
 def _h_insert_page_break(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
@@ -305,14 +314,28 @@ def _h_insert_paragraph(action: Dict, params: Dict, op: "WordTextOperator") -> D
 
 def _h_delete_range(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
     rng = _resolve_rng(op, params.get("rng", ""))
+    before_state_raw = _capture_state(STATE_CONTENT, rng, op)
+    before_state_text = _human_readable_state(STATE_CONTENT, before_state_raw) if before_state_raw else ""
     op.delete_range(rng)
-    return {"success": True}
+    result = {"success": True}
+    if before_state_text:
+        result["before_state"] = before_state_text
+    if before_state_raw:
+        result["before_state_raw"] = before_state_raw
+    return result
 
 
 def _h_clear_range(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
     rng = _resolve_rng(op, params.get("rng", ""))
+    before_state_raw = _capture_state(STATE_CONTENT, rng, op)
+    before_state_text = _human_readable_state(STATE_CONTENT, before_state_raw) if before_state_raw else ""
     op.text.clear(rng)
-    return {"success": True}
+    result = {"success": True}
+    if before_state_text:
+        result["before_state"] = before_state_text
+    if before_state_raw:
+        result["before_state_raw"] = before_state_raw
+    return result
 
 
 def _h_select(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
@@ -458,7 +481,9 @@ ACTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     "set_font_name":          {"target": None,              "method": "set_font_name",        "rng": True,  "params": {"font_name": "name"},         "result": RESULT_NONE,  "capture": STATE_FONT},
     "set_font_size":          {"target": None,              "method": "set_font_size",        "rng": True,  "params": {"size": "size"},               "result": RESULT_NONE,  "capture": STATE_FONT},
     "set_highlight":          {"target": None,              "method": "set_highlight",        "rng": True,  "params": {"highlight": "highlight"},     "result": RESULT_NONE,  "capture": STATE_FONT},
-    "set_paragraph_alignment":{"target": None,              "method": "set_paragraph_alignment","rng": True,"params": {"alignment": "align"},        "result": RESULT_NONE,  "capture": STATE_PARA},
+    # 注意：set_paragraph_alignment 内部调用的是 rng.Bold/rng.Italic 等字体属性，
+    # 不是 ParagraphFormat，故 capture 应为 STATE_FONT（不能让 LLM 误以为改的是段落格式）
+    "set_paragraph_alignment":{"target": None,              "method": "set_paragraph_alignment","rng": True,"params": {"alignment": "align"},        "result": RESULT_NONE,  "capture": STATE_FONT},
 
     # ── 段落格式（fmt 调用） ────────────────────────────────
     "set_line_spacing":        {"target": ("fmt", None),     "method": "set_line_spacing",       "rng": True,  "params": {"spacing": "value", "rule": "rule"},                "result": RESULT_NONE,  "capture": STATE_PARA},

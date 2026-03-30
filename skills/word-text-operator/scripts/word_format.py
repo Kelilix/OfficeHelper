@@ -596,15 +596,20 @@ class TextFormatter:
     def get_font_info(self, rng: "CDispatch") -> dict:
         """读取 Range 的字体信息。"""
         f = rng.Font
-        return {
+        result = {
             "name": f.Name,
             "size": f.Size,
             "bold": f.Bold,
             "italic": f.Italic,
             "underline": f.Underline,
             "color": f.Color,
-            "highlight": f.Highlight,
         }
+        # Highlight 属性在部分 Word/COM 环境下不存在，单独保护避免整函数崩溃
+        try:
+            result["highlight"] = f.Highlight
+        except Exception:
+            pass
+        return result
 
     def get_paragraph_format_info(self, rng: "CDispatch") -> dict:
         """读取 Range 的段落格式信息。"""

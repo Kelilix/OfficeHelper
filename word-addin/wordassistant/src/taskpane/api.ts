@@ -11,12 +11,14 @@ export interface ChatRequest {
   message: string;
   selection_text: string;
   document_name: string;
+  session_id: string;
 }
 
 export interface ChatResponse {
   response: string;
   success: boolean;
   error?: string;
+  session_id: string;
 }
 
 export interface WordStatus {
@@ -44,16 +46,19 @@ function uuid(): string {
 
 /**
  * 发送聊天消息到 AI Agent
+ * @param sessionId  前端生成的 UUID，同一窗口内所有消息共享同一个 sessionId
  */
 export async function sendChat(
   message: string,
   selectionText: string,
-  documentName: string
+  documentName: string,
+  sessionId: string
 ): Promise<ChatResponse> {
   const body: ChatRequest = {
     message,
     selection_text: selectionText,
     document_name: documentName,
+    session_id: sessionId,
   };
 
   const resp = await fetch(`${API_BASE}/chat`, {

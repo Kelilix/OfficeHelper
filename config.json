@@ -1,9 +1,9 @@
 {
   "llm": {
     "provider": "qwen",
-    "api_key": "sk-sp-cbca8d22aa5949ecaf15bfc8f0029e98",
+    "api_key": "xxxxxxxxxx",
     "model": "qwen3.5-plus",
-    "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    "base_url": "xxxxxxxxxx",
     "temperature": 0.7,
     "max_tokens": 2000
   },

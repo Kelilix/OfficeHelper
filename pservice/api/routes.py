@@ -25,10 +25,57 @@ from .service import word_service, llm_service
 from skills import get_skill_descriptions, get_skill_content, list_skill_names
 from .action_registry import execute_action
 
-# 将 skills/word-text-operator 加入 sys.path，使 scripts/ 下的相对导入可用
-_scripts_parent = Path(__file__).parent.parent.parent / "skills" / "word-text-operator"
-if _scripts_parent.exists():
-    sys.path.insert(0, str(_scripts_parent))
+# ── 加载 word-text-operator skill 模块 ────────────────────────────────────────
+# 策略与 main.py 一致：用 importlib.util 逐文件加载，解决相对导入问题
+_project_root = Path(__file__).parent.parent.parent
+
+
+def _ensure_wto_module():
+    """确保 WordTextOperator 已加载到 sys.modules。"""
+    key = "scripts.word_text_operator"
+    if key in sys.modules:
+        return
+    scripts_dir = _project_root / "skills" / "word-text-operator" / "scripts"
+    _scripts_parent = Path(__file__).parent.parent.parent / "skills" / "word-text-operator"
+    if str(_scripts_parent) not in sys.path:
+        sys.path.insert(0, str(_scripts_parent))
+
+    submodules = ["word_base", "word_range_navigation", "word_text_operations",
+                  "word_selection", "word_find_replace", "word_format", "word_bookmark"]
+    import importlib.util
+
+    for sub in submodules:
+        sub_file = scripts_dir / f"{sub}.py"
+        if not sub_file.exists():
+            continue
+        sub_name = f"scripts.{sub}"
+        if sub_name in sys.modules:
+            continue
+        spec = importlib.util.spec_from_file_location(sub_name, sub_file)
+        if spec is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[sub_name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            pass
+
+    main_file = scripts_dir / "word_text_operator.py"
+    if main_file.exists():
+        spec = importlib.util.spec_from_file_location(key, main_file)
+        if spec is not None:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[key] = mod
+            try:
+                spec.loader.exec_module(mod)
+            except Exception:
+                pass
+
+
+_ensure_wto_module()
+from scripts.word_text_operator import WordTextOperator
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -78,6 +125,15 @@ def chat(req: ChatRequest) -> ChatResponse:
             session_id, current_turn, bool(skill_explicit), len(req.message or ""),
         )
 
+        logger.info("[/api/chat] >>> Step 1: 检查 Word 连接")
+        # ── 每次请求都检查 Word 连接状态，未连接时尝试重新连接 ───────────────
+        if not word_service.is_connected():
+            logger.info("[/api/chat] Word 未连接，尝试重新连接...")
+            reconnect_ok = word_service.connect(visible=True)
+            if not reconnect_ok:
+                logger.warning("[/api/chat] Word 重新连接失败")
+
+        logger.info("[/api/chat] >>> Step 2: 读取选区")
         # ── 实时刷新选区 ──────────────────────────────────────────────
         current_selection = req.selection_text
         if not current_selection:
@@ -86,195 +142,184 @@ def chat(req: ChatRequest) -> ChatResponse:
             except Exception:
                 current_selection = ""
 
-        skill_to_run = skill_explicit
+        logger.info("[/api/chat] >>> Step 3: 初始化 WordTextOperator")
+        # ── Step 1: 初始化 WordTextOperator（复用 word_service 的 COM 连接） ──
+        try:
+            op = WordTextOperator()
+            op._base._word_app = word_service._word_app
+            # word_service._document 仅在通过 service 打开文档时存在；
+            # 若 Word 由用户手动打开（无 service 介入），则为 None。
+            # 两种情况都尝试以 ActiveDocument 作为兜底。
+            if word_service._document is None:
+                try:
+                    op._base._document = word_service._word_app.ActiveDocument
+                except Exception:
+                    op._base._document = None
+            else:
+                op._base._document = word_service._document
+            op._init_submodules()
+        except Exception as e:
+            logger.warning("[/api/chat] WordTextOperator init failed: %s", e)
+            op = None
 
-        # ── Round 1：内部选技能（skill 未指定时）─────────────────────────
-        # 内部决策，不追加到历史，避免污染用户的对话历史
-        if not skill_to_run:
-            skills_desc = get_skill_descriptions()
-            prompt = _build_prompt_select(req.message, current_selection, skills_desc)
-            llm_select = llm_service.chat_with_context(
-                req.message, prompt, session_id=session_id,
-                add_to_history=False,
-            )
-            skill_to_run = _parse_skill_selection(llm_select) or ""
-
-            logger.info(
-                "[/api/chat] 内部选技能完成 | session_id=%s skill=%s",
-                session_id, skill_to_run or "(未识别)",
-            )
-
-            if not skill_to_run:
-                return ChatResponse(
-                    response="无法识别所需技能，请重述需求。",
-                    success=True, session_id=session_id,
-                    turn=current_turn, stage="select", skill_selected=None,
+        # ── Step 2: 捕获当前格式状态（供 Plan/Execute 阶段 LLM 参考） ──────────
+        current_format_state = ""
+        if op and op._base._word_app is not None:
+            try:
+                rng = op._base.selection
+                font_info = op._fmt.get_font_info(rng) if op._fmt else {}
+                para_info = op._fmt.get_paragraph_format_info(rng) if op._fmt else {}
+                lines = []
+                if font_info:
+                    lines.append("字体：")
+                    for k, v in font_info.items():
+                        if v and v != 0:
+                            lines.append(f"  {k}: {v}")
+                if para_info:
+                    lines.append("段落：")
+                    for k, v in para_info.items():
+                        if v and v != 0:
+                            lines.append(f"  {k}: {v}")
+                current_format_state = "\n".join(lines)
+            except Exception as e:
+                logger.warning(
+                    "[/api/chat] 读取格式状态失败（可能是 Word 已关闭或 COM 连接失效）: %s", e
                 )
 
-        skill_content = get_skill_content(skill_to_run)
-        if not skill_content:
-            raise ValueError(
-                f"未找到技能：{skill_to_run}（请检查 skills/ 目录下是否存在对应目录）"
+        logger.info("[/api/chat] >>> Step 4: Plan 阶段 - 调用 LLM 决定技能和拆分")
+        # ── Step 3: Plan 阶段 - 决定每个 step 的技能和拆分 ────────────────────
+        skills_desc = get_skill_descriptions()
+        prompt_plan = _build_prompt_plan_select(
+            req.message, current_selection, skills_desc,
+            current_format_state=current_format_state,
+        )
+        logger.info("[/api/chat] >>> Step 4: 实际调用 LLM（Plan），即将阻塞等待响应...")
+        llm_plan_resp = llm_service.chat_with_context(
+            req.message, prompt_plan, session_id=session_id,
+            add_to_history=False,
+        )
+        logger.info("[/api/chat] >>> Step 4: LLM 响应已返回，长度=%d", len(llm_plan_resp))
+        plan_steps = _parse_plan_select(llm_plan_resp)
+        if not plan_steps:
+            # plan_steps 为 None 或空列表时走 fallback
+            logger.warning(
+                "[plan] 无法解析 LLM plan 响应，回退到单步执行 | resp_preview=%s",
+                llm_plan_resp[:200],
+            )
+            skill_to_run = skill_explicit
+            if not skill_to_run:
+                skills_all = get_skill_descriptions()
+                prompt_sel = _build_prompt_select(req.message, current_selection, skills_all)
+                llm_sel = llm_service.chat_with_context(
+                    req.message, prompt_sel, session_id=session_id,
+                    add_to_history=False,
+                )
+                skill_to_run = _parse_skill_selection(llm_sel) or ""
+            if not skill_to_run:
+                return ChatResponse(
+                    response="无法理解您的需求，请重述。",
+                    success=True, session_id=session_id,
+                    turn=current_turn, stage="plan",
+                )
+            plan_steps = [{"step": 1, "skill": skill_to_run, "description": "单步回退",
+                          "selection_hint": "全文", "need_feedback": False}]
+
+        # ── Step 4: 初始化 ParagraphOperator（用于段落索引操作） ────────────────
+        para_op = None
+        if op and op._base._word_app is not None:
+            try:
+                from scripts.word_paragraph_operator import ParagraphOperator
+                para_op = ParagraphOperator(op._base)
+            except Exception as e:
+                logger.warning("[/api/chat] ParagraphOperator init failed: %s", e)
+
+        # ── Step 5: 循环执行每个 step ────────────────────────────────────────
+        executed_all = []
+        prev_results = []
+        prev_step_feedback = []   # 上一步的 feedback，供下一步 prompt 使用
+        for step_def in plan_steps:
+            step_num = step_def["step"]
+            skill_name = step_def["skill"]
+            step_desc = step_def["description"]
+            step_selection_hint = step_def.get("selection_hint", "")
+
+            skill_content = get_skill_content(skill_name)
+            if not skill_content:
+                logger.error("[plan] skill content empty: %s", skill_name)
+                executed_all.append({"step": step_num, "skill": skill_name, "action": "",
+                                    "success": False, "error": "skill %s not found" % skill_name})
+                continue
+
+            logger.info(
+                "[plan] Step %d/%d | skill=%s | hint=%s | desc=%s",
+                step_num, len(plan_steps), skill_name, step_selection_hint, step_desc,
             )
 
-        # ── 立即连接 Word，捕获当前格式状态 ─────────────────────────────
-        # 关键：在 LLM 调用之前就捕获状态。
-        # 这样无论是第 1 轮还是第 N 轮，LLM 都能看到"当前字体/段落是什么"。
-        # 注意：每次请求都会重新连接，以反映用户最新的选区状态。
-        op: Any = None
-        init_error: str = ""
-        current_font_state: str = ""
-        current_para_state: str = ""
-        try:
-            from scripts.word_text_operator import WordTextOperator
-            op = WordTextOperator()
-            op._base.connect()
-            op._init_submodules()
-            if op._base._word_app and op._fmt:
-                sel = op._base._word_app.Selection
-                # 有选区时读选区格式；仅光标（折叠选区）时读插入点处格式（Word 仍返回有效 Font）
-                if sel is not None:
-                    try:
-                        has_range = sel.Start != sel.End
-                    except Exception as e:
-                        logger.warning("[/api/chat] sel.Start/End 异常（可能sel非Range对象）: %s", e)
-                        has_range = False
-                    # 字体状态
-                    try:
-                        fi = op._fmt.get_font_info(sel)
-                    except Exception as e:
-                        logger.error("[/api/chat] get_font_info 异常: %s", e)
-                        fi = {}
-                    logger.info(
-                        "[/api/chat] 原始 font_info: name=%r size=%r bold=%r italic=%r underline=%r",
-                        fi.get("name"), fi.get("size"), fi.get("bold"),
-                        fi.get("italic"), fi.get("underline"),
-                    )
-                    # 只要 fi 不是全空 dict，就说明 COM 通信正常，只是部分字段无值
-                    fi_has_data = any(
-                        fi.get(k) not in (None, "", 0) for k in ("name", "size", "bold", "italic", "underline")
-                    )
-                    if fi is None or not isinstance(fi, dict):
-                        logger.warning("[/api/chat] font_info 返回异常: %r", fi)
-                    elif fi_has_data or (fi.get("name") is not None) or (fi.get("size") is not None):
-                        size_val = fi.get("size")
-                        name_val = fi.get("name")
-                        size_str = f"{size_val}pt" if size_val and size_val != 0 else "字号未知"
-                        name_str = name_val if name_val else "字体名未知"
-                        bold_str = "粗体" if fi.get("bold") in (-1, True) else ""
-                        italic_str = "斜体" if fi.get("italic") in (-1, True) else ""
-                        underline_val = fi.get("underline", 0)
-                        underline_str = "下划线" if underline_val and underline_val != 0 else ""
-                        styles = " ".join(x for x in [bold_str, italic_str, underline_str] if x)
-                        current_font_state = (
-                            f"字体: {name_str} {size_str}"
-                            + (f" ({styles})" if styles else " (常规)")
+            prompt_exec = _build_prompt_execute(
+                req.message, current_selection, skill_name, skill_content,
+                current_format_state,
+                selection_hint=step_selection_hint,
+                prev_executed=prev_results,
+                step_num=step_num,
+                total_steps=len(plan_steps),
+                step_def=step_def,
+                prev_step_feedback=prev_step_feedback,
+            )
+            logger.info("[/api/chat] >>> Step 5: 执行循环 step=%d skill=%s，即将调用 LLM...", step_num, skill_name)
+            try:
+                llm_resp = llm_service.chat_with_context(
+                    req.message, prompt_exec, session_id=session_id,
+                    add_to_history=False,
+                )
+                logger.info("[/api/chat] >>> Step 5: step=%d LLM 响应已返回，长度=%d", step_num, len(llm_resp))
+            except Exception as e:
+                logger.error("[plan] Step %d LLM failed: %s", step_num, e)
+                executed_all.append({"step": step_num, "skill": skill_name, "action": "",
+                                    "success": False, "error": "LLM failed: %s" % e})
+                continue
+
+            actions = _parse_actions(llm_resp)
+            if not actions:
+                logger.warning("[plan] Step %d no valid actions", step_num)
+                executed_all.append({"step": step_num, "skill": skill_name, "action": "",
+                                    "success": False, "error": "no valid actions"})
+                continue
+
+            logger.info("[plan] Step %d actions: %s", step_num, [a.get("action") for a in actions])
+
+            step_prev = list(prev_results)
+            for action in actions:
+                expanded = _substitute_rng_placeholder([action], step_prev)
+                for sub_action in expanded:
+                    result = execute_action(sub_action, op, para_op=para_op)
+                    result["step"] = step_num
+                    result["skill"] = skill_name
+                    executed_all.append(result)
+                    step_prev.append(result)
+                    if result.get("success"):
+                        logger.info(
+                            "[plan]   OK step=%d action=%s",
+                            step_num, sub_action.get("action"),
                         )
-                        if not has_range:
-                            current_font_state += "（插入点/折叠选区，以上为光标处格式）"
                     else:
                         logger.warning(
-                            "[/api/chat] font_info 全字段为空，将使用占位状态: %r", fi,
+                            "[plan]   FAIL step=%d action=%s error=%s",
+                            step_num,
+                            sub_action.get("action"),
+                            result.get("error"),
                         )
-                    # 段落状态
-                    try:
-                        pf = op._fmt.get_paragraph_format_info(sel)
-                    except Exception as e:
-                        logger.error("[/api/chat] get_paragraph_format_info 异常: %s", e)
-                        pf = {}
-                    logger.info(
-                        "[/api/chat] 原始 para_info: alignment=%r line_spacing=%r first_line_indent=%r",
-                        pf.get("alignment"), pf.get("line_spacing"), pf.get("first_line_indent"),
-                    )
-                    align_map = {0: "左对齐", 1: "居中", 2: "右对齐", 3: "两端对齐", 4: "分散对齐"}
-                    pf_parts = []
-                    if pf.get("alignment") is not None:
-                        pf_parts.append(f"对齐: {align_map.get(pf['alignment'], pf['alignment'])}")
-                    if pf.get("line_spacing") not in (None, 0, ""):
-                        pf_parts.append(f"行距: {pf['line_spacing']}")
-                    if pf.get("first_line_indent") not in (None, 0, ""):
-                        pf_parts.append(f"首行缩进: {pf['first_line_indent']}")
-                    if pf_parts:
-                        current_para_state = "段落: " + " | ".join(pf_parts)
-        except Exception as e:
-            init_error = str(e)
-            logger.warning("[/api/chat] WordTextOperator 初始化失败: %s", e)
 
-        if op is None or not getattr(op._base, "_word_app", None) or not getattr(op, "_fmt", None):
-            return ChatResponse(
-                response=f"无法连接 Word：{init_error or 'Word 未启动或没有打开文档'}",
-                success=False,
-                error=f"Word 连接失败: {init_error or 'Word 未启动或没有打开文档'}",
-                session_id=session_id,
-                turn=current_turn,
-                stage="execute",
-                skill_selected=skill_to_run,
-            )
+            prev_results = step_prev
+            prev_step_feedback = step_prev   # 本步结果作为下一步的 feedback
 
-        # ── 诊断：Word 连接状态 ───────────────────────────────────────────
-        logger.info(
-            "[/api/chat] Word连接诊断 | op=%s word_app=%s fmt=%s",
-            op is not None,
-            getattr(op, "_base", None) is not None and getattr(op._base, "_word_app", None) is not None,
-            getattr(op, "_fmt", None) is not None,
-        )
-        # ── 单次 LLM 调用（带当前状态）────────────────────────────────────
-        # 关键：在 LLM 调用时就附上当前格式状态。
-        # 同时把状态也拼到 user_message 里，这样在日志和历史中能原样看到【当前状态】。
-        # state_parts 已由上方捕获逻辑填充。
-        state_parts = [p for p in [current_font_state, current_para_state] if p]
-        current_format_state = "\n".join(state_parts)
-
-        logger.info(
-            "[/api/chat] 状态捕获 | font='%s' para='%s'",
-            current_font_state[:40], current_para_state[:40],
-        )
-
-        # ── 构造发给 LLM 的 user_message（含当前状态）──────────────────────
-        # 固定出现【用户要求】【当前状态】，便于在日志/终端里搜索「当前状态」；
-        # 无捕获数据时用占位，避免整段省略导致搜不到关键字。
-        state_block = (
-            current_format_state.strip()
-            if current_format_state.strip()
-            else "（未读取到有效格式：Word 未就绪、选区异常，或 COM 未返回字体名/字号等）"
-        )
-        user_msg_with_state = (
-            f"【用户要求】\n{req.message}\n\n【当前状态】\n{state_block}"
-        )
-
-        prompt = _build_prompt_execute(
-            req.message, current_selection, skill_to_run, skill_content,
-            current_format_state,
-        )
-        llm_response = llm_service.chat_with_context(
-            user_msg_with_state, prompt, session_id=session_id,
-        )
-
-        actions = _parse_actions(llm_response)
-        if not actions:
-            return ChatResponse(
-                response="LLM 未返回有效操作。",
-                success=True, session_id=session_id,
-                turn=current_turn, stage="execute", skill_selected=skill_to_run,
-            )
-
-        # ── 执行 action ────────────────────────────────────────────────
-        # execute_action 内部会捕获 before_state（操作执行前的格式快照），
-        # append_executed_result 将其追加到历史记录中，
-        # 使前端能看到"从 X 变为 Y"的对比。
-        executed = []
-        for action in actions:
-            result = execute_action(action, op)
-            executed.append(result)
-
-        llm_service.append_executed_result(session_id, executed)
-
-        summary = _summarize_execution(llm_response, executed)
+        llm_service.append_executed_result(session_id, executed_all)
+        summary = _summarize_execution("", executed_all)
         final_turn = len(llm_service.get_session_history(session_id)) // 2
 
         logger.info(
-            "[/api/chat] 执行完成 | session_id=%s skill=%s actions=%d",
-            session_id, skill_to_run, len(actions),
+            "[/api/chat] done | session=%s steps=%d actions=%d ok=%d",
+            session_id, len(plan_steps), len(executed_all),
+            sum(1 for e in executed_all if e.get("success")),
         )
         return ChatResponse(
             response=summary,
@@ -282,9 +327,9 @@ def chat(req: ChatRequest) -> ChatResponse:
             session_id=session_id,
             turn=final_turn,
             stage="execute",
-            skill_selected=skill_to_run,
-            executed=executed,
+            executed=executed_all,
         )
+
 
     except Exception as e:
         logger.exception("[/api/chat] 失败: %s", e)
@@ -345,6 +390,222 @@ def word_disconnect(save: bool = False) -> dict:
         return {"success": False, "error": str(e)}
 
 
+# ── Plan 阶段 ──────────────────────────────────────────────────────────
+
+def _build_prompt_plan_select(
+    user_message: str, selection_text: str,
+    all_skills_desc: str,
+    current_format_state: str = "",
+) -> str:
+    """Plan 阶段：LLM 决定每步的技能和拆分意图（不声明选区范围）。"""
+    selection_block = (
+        f"用户选中了以下内容：\n---\n{selection_text}\n---\n\n"
+        if selection_text
+        else "（用户当前无选中文本）\n\n"
+    )
+    state_section = (
+        f"## 当前选中内容的格式状态\n---\n{current_format_state.strip()}\n---\n\n"
+        if current_format_state.strip()
+        else ""
+    )
+    return f"""你是一个 Word 文档操作规划助手。
+
+{selection_block}{state_section}## 用户的需求
+"{user_message}"
+
+## 可用技能列表
+{all_skills_desc}
+
+## 你的任务
+分析用户需求，决定需要几步操作以及每步分别使用哪个技能。
+
+**重要规则**：
+- 每个 step 只能选一个技能
+- 不同选区的操作必须拆为不同 step（如"第1段"和"选中部分"是不同选区，“第1行”和“选中”部分是不同选区）
+- **在仅涉及一个选区的情况下，纯修改类需求（缩进、行距、字体等）必须控制为1步，绝不能拆成多个 step**（例如：同时改缩进和行距 → 1步；设字体和字号 → 1步；改对齐和首行缩进 → 1步）
+- 先查后改的需求（find 后修改）→ 2 步（第一步 need_feedback=true）
+
+**违反规则的典型错误示例**：
+- ❌ 用户说"把选中文字的首行缩进改成2字符" → 错误拆成"获取段落"+"设置缩进"两个 step
+- ❌ 用户说"调大行距" → 错误拆成"查格式"+"改行距"两个 step
+- ❌ 用户说"把字体设成黑体，字号设成三号" → 错误拆成两个 step
+- ✅ 正确：所有纯修改类操作在同一 step 内一次性完成
+
+## 输出格式
+
+```json
+{{
+  "plan": [
+    {{"step": 1, "skill": "word-text-operator", "description": "...", "selection_hint": "第1段", "need_feedback": false}},
+    {{"step": 2, "skill": "word-text-operator", "description": "...", "selection_hint": "用户当前选中的文本", "need_feedback": false}}
+  ]
+}}
+```
+
+**selection_hint**：用简短的自然语言描述该 step 的操作对象（如"第1段"、"全文"、"选中部分"）。
+**need_feedback**：仅在"先查后改"场景设为 true，其余均为 false。
+
+只返回 JSON。"""
+
+
+def _parse_plan_select(llm_response: str):
+    """解析 plan JSON，提取 skill 和 selection_hint。"""
+    try:
+        import re as _re
+        m = _re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", llm_response, _re.IGNORECASE)
+        text = m.group(1).strip() if m else llm_response.strip()
+        for start in range(len(text)):
+            ch = text[start]
+            if ch == "{":
+                obj = json.JSONDecoder().raw_decode(text, start)[0]
+                plan = obj.get("plan") or obj.get("steps")
+                if not isinstance(plan, list):
+                    return None
+                break
+            if ch == "[":
+                plan = json.JSONDecoder().raw_decode(text, start)[0]
+                if not isinstance(plan, list):
+                    return None
+                break
+        else:
+            return None
+
+        valid_names = list_skill_names()
+        validated = []
+        for step in plan:
+            if not isinstance(step, dict):
+                continue
+            raw_skill = (step.get("skill") or "").strip()
+            skill_name = None
+            for name in valid_names:
+                if name.lower() == raw_skill.lower() or raw_skill.lower() in name.lower():
+                    skill_name = name
+                    break
+            if not skill_name:
+                continue
+            validated.append({
+                "step": int(step.get("step", len(validated) + 1)),
+                "skill": skill_name,
+                "description": step.get("description", ""),
+                "selection_hint": step.get("selection_hint", ""),
+                "need_feedback": bool(step.get("need_feedback", False)),
+            })
+        return validated if validated else None
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.warning("[_parse_plan_select] 解析异常：%s，原始：%s", e, llm_response[:200])
+        return None
+
+
+def _substitute_rng_placeholder(
+    actions, prev_results,
+):
+    """
+    1. 从 prev_results 中提取选区：
+       - 单个选区：get_paragraph_range → [s, e]；get_selection_info → {start, end}
+       - 多个选区：find_all → [{start, end, text}, ...]
+    2. 将后续 action 的 rng 占位符 "[start, end]" 替换为真实值
+    3. 若 action 缺少 rng 参数但有查询结果，直接注入
+    4. find_all 返回多个位置时，自动将单个 action 展开为多个（每个位置一条）
+    """
+    # ── 收集所有选区 ───────────────────────────────────────────────
+    single_range = None   # 单个 [start, end]
+    multiple_ranges = []   # find_all 返回的多位置列表
+
+    for r in reversed(list(prev_results)):
+        if not r.get("success"):
+            continue
+        res = r.get("result")
+        action_name = r.get("action", "")
+        if action_name == "find_all" and isinstance(res, list):
+            # 收集全部位置（按 start,end 去重，防止上游重复 yield）
+            seen_pos = set()
+            for item in res:
+                if isinstance(item, dict) and "start" in item and "end" in item:
+                    key = (int(item["start"]), int(item["end"]))
+                    if key not in seen_pos:
+                        seen_pos.add(key)
+                        multiple_ranges.append([key[0], key[1]])
+            break
+        elif isinstance(res, (list, tuple)) and len(res) == 2:
+            single_range = list(res)
+            break
+        elif isinstance(res, dict) and "start" in res and "end" in res:
+            single_range = [int(res["start"]), int(res["end"])]
+            break
+
+    # 有多个位置 → 展开所有 action，每个位置执行一次（查询类除外）
+    if multiple_ranges:
+        rng_literal = "[start, end]"
+        _QUERY_ACTIONS = frozenset((
+            "get_selection_info", "get_full_text", "get_text",
+            "get_paragraph_range", "find", "find_all", "count_occurrences",
+            "list_bookmarks", "char_count", "word_count",
+            "sentence_count", "paragraph_count",
+        ))
+        expanded = []
+        for a in actions:
+            params = dict(a.get("params", {}))
+            rng_val = params.get("rng")
+            aname = a.get("action", "")
+            # 查询类 action 只执行一次（取当前位置），其余 action 每个位置展开一条
+            if aname in _QUERY_ACTIONS:
+                logger.info("[rng_skip] 查询类 action 不展开 | action=%s", aname)
+                resolved_a = {**a}
+                if rng_val == rng_literal:
+                    resolved_a = {**a, "params": {**params, "rng": multiple_ranges[0]}}
+                    logger.info("[rng_substitute] 查询类 [start,end] → %s | action=%s", multiple_ranges[0], aname)
+                expanded.append(resolved_a)
+                continue
+            if rng_val == rng_literal:
+                logger.warning(
+                    "[rng_substitute] find_all 多位置场景下不支持 [start, end] 占位符，"
+                    "请省略 rng 参数 | action=%s", aname,
+                )
+            if rng_val is None or rng_val == rng_literal:
+                for pos in multiple_ranges:
+                    p2 = dict(params)
+                    p2.pop("rng", None)
+                    p2["rng"] = pos
+                    expanded.append({**a, "params": p2})
+                    logger.info(
+                        "[rng_expand] find_all 展开 | action=%s → rng=%s",
+                        aname, pos,
+                    )
+            else:
+                expanded.append(a)
+        return expanded
+
+    if single_range is None:
+        return actions
+
+    rng_literal = "[start, end]"
+    resolved = []
+    for a in actions:
+        params = dict(a.get("params", {}))
+        rng_val = params.get("rng")
+        action_name = a.get("action", "")
+        if rng_val == rng_literal:
+            params["rng"] = single_range
+            logger.info("[rng_substitute] 替换占位符 → %s | action=%s", single_range, action_name)
+            resolved.append({**a, "params": params})
+        elif rng_val is None and any(
+            action_name.startswith(p) for p in (
+                "set_", "replace", "expand", "collapse",
+                "delete_range", "clear_range", "insert_",
+                "get_", "select_paragraph", "select_paragraph_range",
+                "merge_with", "split_paragraph",
+            )
+        ):
+            params["rng"] = single_range
+            logger.info("[rng_inject] 注入 rng → %s | action=%s", single_range, action_name)
+            resolved.append({**a, "params": params})
+        else:
+            resolved.append(a)
+    return resolved
+
+
 # ── 内部函数 ──────────────────────────────────────────────────────
 
 def _build_prompt_select(user_message: str, selection_text: str, skills_desc: str) -> str:
@@ -374,50 +635,268 @@ def _build_prompt_select(user_message: str, selection_text: str, skills_desc: st
 def _build_prompt_execute(
     user_message: str, selection_text: str, skill_name: str, skill_content: str,
     current_format_state: str = "",
+    selection_hint: str = "",
+    prev_executed: list = None,
+    step_num: int = 1,
+    total_steps: int = 1,
+    step_def: dict = None,
+    prev_step_feedback: list = None,
 ) -> str:
-    state_for_prompt = (
-        current_format_state.strip()
-        if current_format_state.strip()
-        else "（未读取到有效格式，以用户消息中【当前状态】块为准）"
+    prev_executed = prev_executed or []
+    step_def = step_def or {}
+    prev_step_feedback = prev_step_feedback or []
+
+    sf = current_format_state.strip() if current_format_state.strip() else "（未读取到有效格式，以用户消息中【当前状态】块为准）"
+    format_section = (
+        "\n\n## 当前选中内容的格式状态\n（以下是你决策时的参考起始状态）\n---\n"
+        + sf + "\n---\n"
     )
-    format_section = f"""
-## 当前选中内容的格式状态
-（以下是你决策时的参考起始状态，用户如需"调回"/"撤销"/"改回去"，请以此为依据）
----
-{state_for_prompt}
----
 
-"""
+    # ── 整理上一步 feedback 中的所有选区 ─────────────────────────────────
+    # 注意：选区查询结果只属于当前 step，跨 step 必须重新查询。
+    # 此处收集的 all_ranges 仅用于「发现 find_all 返回了多位置」时告诉 LLM 该情况，
+    # 绝不意味着后续 step 可以复用这些值。
+    all_ranges = []
+    if prev_step_feedback:
+        for r in prev_step_feedback:
+            if not r.get("success"):
+                continue
+            res = r.get("result")
+            if isinstance(res, dict) and "matches" in res:
+                all_ranges.extend(res["matches"])
+            elif r.get("action") == "find_all" and isinstance(res, list):
+                seen_fb = set()
+                for item in res:
+                    if isinstance(item, dict) and "start" in item and "end" in item:
+                        key = (int(item["start"]), int(item["end"]))
+                        if key not in seen_fb:
+                            seen_fb.add(key)
+                            all_ranges.append(dict(item))
 
-    return f"""你是一个专业的 Word 文档格式化助手，正在使用技能「{skill_name}」。
+    feedback_section = ""
+    if prev_step_feedback:
+        lines_fb = ["\n## [上一步 feedback]"]
+        for r in prev_step_feedback:
+            a = r.get("action", "?")
+            ok = "OK" if r.get("success") else "FAIL"
+            res = r.get("result")
+            info = a
+            if res and isinstance(res, dict):
+                if "start" in res and "end" in res:
+                    info += " → 选区: %d~%d" % (res["start"], res["end"])
+                elif "matches" in res:
+                    info += " → 查找到 %d 处" % len(res["matches"])
+            elif res and isinstance(res, list) and a == "find_all":
+                uniq = []
+                s2 = set()
+                for it in res:
+                    if isinstance(it, dict) and "start" in it and "end" in it:
+                        k = (int(it["start"]), int(it["end"]))
+                        if k not in s2:
+                            s2.add(k)
+                            uniq.append(it)
+                info += " → 查找到 %d 处" % len(uniq)
+            lines_fb.append("  [" + ok + "] " + info)
+        if all_ranges:
+            rng_lines = ["  选区列表（共 %d 个）：" % len(all_ranges)]
+            for i, rng in enumerate(all_ranges, 1):
+                text = rng.get("text", "")
+                if text:
+                    rng_lines.append("    [%d] start=%d, end=%d, text=\"%s\"" % (i, rng["start"], rng["end"], text))
+                else:
+                    rng_lines.append("    [%d] start=%d, end=%d" % (i, rng["start"], rng["end"]))
+            lines_fb.extend(rng_lines)
+        feedback_section = "\n".join(lines_fb) + "\n"
 
-## 当前上下文
-用户选中了 Word 文档中的以下内容：
----
-{selection_text if selection_text else "(无选中文本)"}
----
-{format_section}## 用户的需求
-"{user_message}"
+    hint_section = ""
+    if step_def:
+        if prev_step_feedback and all_ranges:
+            count = len(all_ranges)
+            requirement_line = (
+                "**强制要求**：如果已有上一步 feedback，上方选区列表中共有 %d 个选区需要处理。\n"
+                "本 step 只需返回操作类 action（如 set_bold、set_font_color、replace 等），\n"
+                "**禁止**返回任何选区查询类 action（find_all、get_selection_info、get_paragraph_range 等）。\n"
+                "系统会将操作类 action 按每个选区自动展开执行（共 %d 条），无需 LLM 生成循环。\n"
+                "rng 参数使用上方选区列表中的具体 start/end 值，格式示例：\n"
+                '  {"action": "set_bold", "params": {"rng": [%d, %d], "bold": true}, "description": "设置加粗"}\n'
+            ) % (count, count, all_ranges[0]["start"], all_ranges[0]["end"])
+        elif prev_step_feedback:
+            requirement_line = (
+                "**强制要求**：\n"
+                "  - 选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）**只属于当前 step 内**的后续 action，\n"
+                "    **不可跨 step 使用**。其他 step 的选区结果与本 step 无关。\n"
+                "  - 本 step 仍需先查询选区（除非操作「全文」），然后再执行操作：\n"
+                '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
+                '    · 操作「选中部分」-> get_selection_info()\n'
+                '    · 操作「全文」-> 不需要 rng\n'
+                "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
+            )
+        else:
+            requirement_line = (
+                "**强制要求**：\n"
+                "  - 若当前 step 是纯查询类 action（find_all、get_xxx 等），则只需返回该查询 action，不要混入操作类 action。\n"
+                "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
+                '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
+                '    · 操作「选中部分」-> get_selection_info()\n'
+                '    · 操作「全文」-> 不需要 rng\n'
+                "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
+            )
+        hint_section = (
+            feedback_section
+            + "## [PLAN] 当前 step（第 %d/%d 步）\n"
+            "本 step 定义：%s\n"
+            + requirement_line
+            + "\n"
+        ) % (step_num, total_steps, str(step_def))
 
-## 技能「{skill_name}」的完整说明书
-{skill_content}
+    pe = ""
+    if prev_executed:
+        lines_pe = ["\n## [已完成] 前面 step 执行结果（本轮以前）："]
+        for r in prev_executed:
+            a = r.get("action", "?")
+            ok = "OK" if r.get("success") else "FAIL"
+            desc = r.get("description", "")
+            rng = r.get("result")
+            info = a
+            if desc:
+                info += " - " + desc
+            if rng and isinstance(rng, (list, tuple)):
+                info += " | rng=" + str(list(rng))
+            elif rng and isinstance(rng, dict):
+                info += " | sel=" + str(rng.get("start")) + "~" + str(rng.get("end"))
+            lines_pe.append("  [" + ok + "] " + info)
+        pe = "\n".join(lines_pe) + "\n"
+    else:
+        pe = "\n## [已完成] 前面 step 执行结果（本轮以前）：(暂空)\n"
 
-## 你的任务
-1. 仔细阅读上方技能说明书，理解所有可用操作
-2. 根据用户需求，决定需要调用哪些操作
-3. 返回 JSON 数组表示要执行的操作列表
-
-## 输出要求
-只返回以下 JSON 格式，不要包含其他说明文字：
-[
-  {{
-    "action": "操作名（必须与技能说明书中的一致）",
-    "params": {{"参数名": "参数值"}},
-    "description": "操作描述"
-  }}
-]
-
-如果用户只是闲聊或问题咨询，不需要执行任何 Word 操作，请返回：[]"""
+    st = selection_text if selection_text else "(无选中文本)"
+    if prev_step_feedback and all_ranges:
+        count = len(all_ranges)
+        task_step2_line = (
+            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
+            "3. 如果已有上一步 feedback，上方选区列表中共有 %d 个选区需要处理。\n"
+            "   必须只返回操作类 action，系统自动按每个选区展开执行（共 %d 条），禁止返回查询类 action。\n"
+            "4. 所有 action 的 rng 参数使用选区列表中的具体 start/end 值，不要留空。"
+        ) % (step_num, total_steps, count, count)
+        rng_example = (
+            '  {"action": "set_bold", "params": {"rng": [%d, %d], "bold": true}, "description": "设置加粗"},'
+            "\n  ..."
+        ) % (all_ranges[0]["start"], all_ranges[0]["end"])
+    elif prev_step_feedback:
+        task_step2_line = (
+            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
+            "3. 注意：选区查询结果（如 get_paragraph_range、get_selection_info）**只属于当前 step**。\n"
+            "   其他 step 的选区结果与本 step 无关，本 step 必须自行查询（除非操作全文）。\n"
+            "4. 后续格式类 action 的 rng 不要填写，系统会自动用本 step 的查询结果填充。"
+        ) % (step_num, total_steps)
+        rng_example = (
+            '  {"action": "get_paragraph_range", "params": {"index": 1}, "description": "获取第1段范围"}\n'
+            '  {"action": "set_font_name", "params": {"font_name": "黑体"}, "description": "设为黑体"}\n'
+            '  {"action": "set_font_size", "params": {"size": 12.0}, "description": "设为小四"}'
+        )
+    else:
+        task_step2_line = (
+            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
+            "3. 若当前 step 不是纯查询类 action（如 find_all、get_xxx），则第一步必须调用选区查询 action。\n"
+            "4. 后续格式类 action 的 rng 不要填写，系统会自动用第一步的查询结果填充。"
+        ) % (step_num, total_steps)
+        # step1 纯查询 → 示例改为 find_all，不应出现 set_xxx
+        rng_example = (
+            '  {"action": "find_all", "params": {"text": "关键词"}, "description": "全文查找关键词"}\n'
+            '  {"action": "get_selection_info", "params": {}, "description": "获取当前选区信息"}'
+        )
+    task_block = (
+        "\n## 你的任务\n"
+        "1. 仔细阅读上方技能说明书\n"
+        + task_step2_line + "\n"
+        "\n## 注意事项\n"
+        "1. **强制要求**：\n"
+    )
+    if prev_step_feedback and all_ranges:
+        count = len(all_ranges)
+        requirement_note = (
+            "  - 如果已有上一步 feedback，本 step 共有 %d 个选区需要处理。\n"
+            "    本 step **只允许**返回操作类 action（如 set_bold、set_font_color、replace 等），\n"
+            "    **禁止**返回任何选区查询类 action（find_all、get_selection_info、get_paragraph_range 等）。\n"
+            "    系统自动将操作类 action 按每个选区展开执行，无需 LLM 生成循环。\n"
+            "  - rng 参数使用上方选区列表中的具体 start/end 值，格式示例：\n"
+            '    {"action": "set_bold", "params": {"rng": [%d, %d], "bold": true}, "description": "设置加粗"}\n'
+            "    不允许留空或使用占位符。"
+        ) % (count, all_ranges[0]["start"], all_ranges[0]["end"])
+    elif prev_step_feedback:
+        requirement_note = (
+            "  - **重要**：选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）\n"
+            "    **只属于当前 step 内**的后续 action，**不可跨 step 使用**。\n"
+            "    其他 step（如 step1）的选区结果与本 step 无关，本 step 必须自行查询。\n"
+            "  - 若本 step 操作「全文」，则不需要 rng 参数。\n"
+            "  - 若操作「第N段」或「选中部分」，则第一步必须调用对应的选区查询 action：\n"
+            "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
+            "    · 操作「选中部分」-> get_selection_info()\n"
+            "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
+        )
+    else:
+        requirement_note = (
+            "  - 若当前 step 是纯查询类 action（find_all、get_xxx 等），则只需返回该查询 action，\n"
+            "    不要混入操作类 action。\n"
+            "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
+            "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
+            "    · 操作「选中部分」-> get_selection_info()\n"
+            "    · 操作「全文」-> 不需要 rng\n"
+            "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
+        )
+    task_block += requirement_note + "\n"
+    if prev_step_feedback and all_ranges:
+        query_note = (
+            "2. **step 类型限制**：\n"
+            "  - **只允许**返回操作类 action（set_bold、set_font_color、replace 等）。\n"
+            "  - **禁止**返回任何查询类 action（find_all、get_selection_info、get_paragraph_range、\n"
+            "    get_full_text、find、count_occurrences 等），系统已在上一步完成查询。\n"
+        )
+        task_block += query_note + "\n"
+    elif not prev_step_feedback:
+        query_note = (
+            "2. **step 类型限制**：\n"
+            "  - 查询类型 step（用于获取文档信息，如 find_all、get_selection_info 等）\n"
+            "    **只能规划纯查询类 action，不得混入 set/delete/insert 等操作类 action**。\n"
+            "  - 操作类型 step（用于修改格式或内容）\n"
+            "    **只能规划操作类 action，不得混入查询类 action**。\n"
+            "\n"
+            "  **注意**：若需求为「先查后改」，必须拆为两个独立 step（查 → 操作），\n"
+            "切勿在单个 step 中混合查询与操作类 action。"
+        )
+        task_block += query_note + "\n"
+    else:
+        # prev_step_feedback 且无 all_ranges：跨 step 选区结果不可复用，本 step 必须自行查询
+        query_note = (
+            "2. **step 类型限制**：\n"
+            "  - **必须**在当前 step 内添加选区查询 action（除非操作全文）。\n"
+            "    选区查询结果只属于当前 step，**不可**使用其他 step 的选区结果。\n"
+        )
+        task_block += query_note + "\n"
+    task_block += (
+        "\n## 输出要求\n"
+        "只返回 JSON 数组，不要其他文字：\n"
+        "[\n"
+        + rng_example + "\n"
+        "]\n"
+    )
+    if not (prev_step_feedback and all_ranges):
+        task_block += "WARNING: 不要在 params 里写 rng，系统会自动填充。\n"
+    return (
+        "你是一个专业的 Word 文档格式化助手，正在使用技能「" + skill_name + "」。\n"
+        + format_section
+        + (hint_section if hint_section else "")
+        + pe
+        + "\n## 当前上下文\n"
+        "用户选中了 Word 文档中的以下内容：\n"
+        "---\n" + st + "\n"
+        "---\n"
+        "\n## 用户的需求\n"
+        "\"" + user_message + "\"\n"
+        "\n## 技能「" + skill_name + "」的完整说明书\n"
+        + skill_content + "\n"
+        + task_block
+    )
 
 
 def _parse_skill_selection(llm_response: str) -> Optional[str]:

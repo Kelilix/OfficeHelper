@@ -192,7 +192,12 @@ class WordBase:
     @property
     def selection(self) -> "CDispatch":
         """返回 Selection 对象。"""
-        return self.word_app.Selection
+        try:
+            return self.word_app.Selection
+        except Exception as e:
+            raise RuntimeError(
+                f"无法获取 Word Selection（Word 可能已关闭或 COM 连接已失效）: {e}"
+            ) from None
 
     @property
     def range(self) -> "CDispatch":

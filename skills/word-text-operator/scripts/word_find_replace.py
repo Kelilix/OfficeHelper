@@ -64,11 +64,19 @@ class FindReplace:
         if not find_again:
             find_obj.ClearFormatting()
         find_obj.Text = text
-        find_obj.WholeWord = whole_word
-        find_obj.MatchCase = match_case
         find_obj.Forward = forward
         find_obj.Wrap = wrap
         find_obj.Format = False
+        # WholeWord 和 MatchCase 在部分 Word 版本（特别是通过 COM 动态调用时）
+        # 为只读属性，直接赋值会抛出 AttributeError，在此兜底忽略。
+        try:
+            find_obj.WholeWord = whole_word
+        except Exception:
+            pass
+        try:
+            find_obj.MatchCase = match_case
+        except Exception:
+            pass
 
     def find_in_range(
         self,
@@ -219,7 +227,13 @@ class FindReplace:
 
         注意：遍历过程中对文档的修改会导致索引失效，请先收集所有位置。
         """
+        import logging as _fi_logger
+        _fi_logger.getLogger(__name__).info(
+            "[find_all_in_range] 开始 | text=%s whole_word=%s match_case=%s",
+            text, whole_word, match_case,
+        )
         doc_len = self._wb.document.Characters.Count
+        _fi_logger.getLogger(__name__).info("[find_all_in_range] doc_len=%d", doc_len)
         find = rng.Find
         self._setup_find(
             find,
@@ -229,13 +243,18 @@ class FindReplace:
             forward=not backward,
             wrap=WD_FIND_WRAP_STORY,
         )
+        _fi_logger.getLogger(__name__).info("[find_all_in_range] _setup_find 完成，开始循环 Execute()")
 
-        found_count = 0
+        first_start = None
         while find.Execute():
-            found_count += 1
+            curr_start = rng.Start
+            if first_start is None:
+                first_start = curr_start
+            elif curr_start == first_start:
+                # 搜索环绕回来，再次回到第一项起点 → 一圈走完，退出
+                break
+            # 每次匹配只 yield 一次；Duplicate 避免 Find 继续移动时污染调用方持有的 Range
             yield rng.Duplicate
-
-        return found_count
 
     def find_all_positions(
         self,

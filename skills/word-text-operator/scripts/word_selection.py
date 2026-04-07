@@ -133,7 +133,11 @@ class SelectionOperator:
 
     def expand_to_paragraph(self) -> int:
         """将 Selection 扩展到包含当前段落。"""
-        return self.sel.Expand(Unit=WD_UNIT_PARAGRAPH)
+        # sel.Expand(WD_UNIT_PARAGRAPH) 在 pywin32 下对部分 story 类型
+        # 扩展不完整，改为 MoveEnd + MoveStart 强制扩到段首段尾。
+        moved = self.sel.MoveEnd(Unit=WD_UNIT_PARAGRAPH, Count=1)
+        self.sel.MoveStart(Unit=WD_UNIT_PARAGRAPH, Count=-1)
+        return moved
 
     def expand_to_line(self) -> int:
         """将 Selection 扩展到整行。"""

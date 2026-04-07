@@ -377,12 +377,15 @@ class QwenProvider(BaseLLMProvider):
             if v is not None
         }
 
+        logger.info("[QwenProvider.chat] 即将发送请求 | model=%s | msgs=%d | extra_body=%s",
+                    self.model, len(chat_messages), extra_body)
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
             stream=kwargs.get("stream", False),
             extra_body=extra_body if extra_body else None,
         )
+        logger.info("[QwenProvider.chat] 收到响应 | type=%s", type(response))
 
         if kwargs.get("stream"):
             return response
@@ -654,7 +657,10 @@ class LLMService:
             base_url,
         )
         try:
-            return self._provider.chat(messages, **self._llm_kwargs(stream))
+            logger.info("[LLM] 即将调用 provider.chat()，请注意这个日志之后是否有日志输出...")
+            result = self._provider.chat(messages, **self._llm_kwargs(stream))
+            logger.info("[LLM] provider.chat() 调用完成，返回结果长度=%d", len(result))
+            return result
         except Exception as e:
             err_body = ""
             try:

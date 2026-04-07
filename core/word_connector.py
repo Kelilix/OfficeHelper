@@ -165,8 +165,18 @@ class WordConnector:
             return False
 
     def is_connected(self) -> bool:
-        """检查是否已连接"""
-        return self._word_app is not None
+        """
+        检查是否已连接（通过探测 COM 代理有效性）。
+        注意：本方法只检查状态，不尝试重新连接（重新连接的逻辑在调用方）。
+        """
+        if self._word_app is None:
+            return False
+        try:
+            _ = self._word_app.ActiveDocument
+            return True
+        except Exception:
+            self._word_app = None
+            return False
 
     def get_main_window_hwnd(self) -> Optional[int]:
         """

@@ -1,9 +1,9 @@
 {
   "llm": {
     "provider": "qwen",
-    "api_key": "xxxxxxxxxx",
+    "api_key": "xxxxx",
     "model": "qwen3.5-plus",
-    "base_url": "xxxxxxxxxx",
+    "base_url": "xxxxx",
     "temperature": 0.7,
     "max_tokens": 2000
   },

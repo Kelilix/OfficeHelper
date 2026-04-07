@@ -13,22 +13,28 @@ if TYPE_CHECKING:
     from win32com.client import CDispatch
 
 
-WD_COLOR = {
+_WD_COLOR_CORRECT = {
+    # Word Font.Color 使用 BGR 格式（低字节=R，中间=G，高字节=B）
     "black": 0x000000,
     "white": 0xFFFFFF,
-    "red": 0xFF0000,
-    "green": 0x00FF00,
-    "blue": 0x0000FF,
-    "yellow": 0xFFFF00,
-    "cyan": 0x00FFFF,
-    "magenta": 0xFF00FF,
+    "red":   0x0000FF,   # BGR: 蓝=0, 绿=0, 红=255
+    "green": 0x00FF00,   # BGR: 蓝=0, 绿=255, 红=0
+    "blue":  0xFF0000,   # BGR: 蓝=255, 绿=0, 红=0
+    "yellow": 0x00FFFF,  # BGR: 蓝=0, 绿=255, 红=255
+    "cyan":   0xFFFF00,  # BGR: 蓝=255, 绿=255, 红=0
+    "magenta": 0xFF00FF, # BGR: 蓝=255, 绿=0, 红=255
     "gray": 0x808080,
-    "dark_red": 0x800000,
+    "dark_red":   0x000080,
     "dark_green": 0x008000,
-    "dark_blue": 0x000080,
-    "dark_yellow": 0x808000,
+    "dark_blue":  0x800000,
+    "dark_yellow": 0x008080,
     "auto": 0xFFFFFFFF,
 }
+# WD_COLOR 作为对外导出名；用 getter 防止运行期被意外覆盖
+def _get_color_map():
+    return _WD_COLOR_CORRECT
+
+WD_COLOR = _get_color_map()  # 旧代码兼容，指向同一字典
 
 WD_UNDERLINE_TYPES = {
     "none": 0,
@@ -85,7 +91,10 @@ WD_LINE_SPACING_RULE = {
     "double": 2,
     "at_least": 3,
     "exact": 4,
+    "multiple": 5,
 }
+
+WD_LINE_SPACING_MULTIPLE = 5
 
 WD_PANOSE_LETTERFORM = {
     "normal": 0,
@@ -103,7 +112,7 @@ class TextFormatter:
 
     def __init__(self, word_base):
         self._wb = word_base
-        self._color_map = WD_COLOR
+        self._color_map = _get_color_map()
         self._underline_map = WD_UNDERLINE_TYPES
         self._highlight_map = WD_HIGHLIGHT_COLOR
 
@@ -114,7 +123,17 @@ class TextFormatter:
     def _resolve_color(self, color: Union[str, int]) -> int:
         """将颜色名或整数转为 Word 颜色值。"""
         if isinstance(color, str):
-            return self._color_map.get(color.lower(), int(color, 16) if color.startswith("#") else int(color))
+            key = color.strip().lower()
+            # 命名字优先从字典查，找不到时再按格式解析
+            resolved = self._color_map.get(key)
+            if resolved is not None:
+                return resolved
+            if color.startswith("#"):
+                return int(color[1:], 16)
+            try:
+                return int(color)
+            except ValueError:
+                raise ValueError(f"无法识别的颜色值: {color!r}，可用命名的颜色如 red/blue/#FF0000")
         return color
 
     def _resolve_underline(self, underline: Union[str, int]) -> int:
@@ -128,6 +147,14 @@ class TextFormatter:
         if isinstance(align, str):
             return self._align_map.get(align.lower(), 0)
         return align
+
+    def _cm_to_pt(self, cm: float) -> float:
+        """用 Word Application 将厘米转为磅值，优先用 word_base 的稳定实例。"""
+        try:
+            return self._wb._word_app.CentimetersToPoints(cm)
+        except Exception:
+            # 部分段落（如表格单元格）无法通过 rng.Application 转换，降级直接用厘米值
+            return cm * 28.3464567
 
     def _font(self, rng: "CDispatch"):
         """获取 Range 的 Font 对象。"""
@@ -348,12 +375,43 @@ class TextFormatter:
                 - "single"/0/None: 使用 LineSpacingRule = single
                 - 数字（如 1.5、2）配合 rule="1.5"/"double"
                 - 磅值数字（如 20）配合 rule="at_least"/"exact"
+                - rule="multiple" 时 value 为「倍数」（如 1.5），内部会转为磅（×12）
             rule: 行距规则
         """
+        pf = rng.ParagraphFormat
         if isinstance(rule, str):
-            rule = WD_LINE_SPACING_RULE.get(rule.lower(), 0)
-        rng.ParagraphFormat.LineSpacingRule = rule
-        rng.ParagraphFormat.LineSpacing = value
+            rule = WD_LINE_SPACING_RULE.get(rule.lower().strip(), 0)
+        else:
+            rule = int(rule)
+
+        if rule == 0:
+            v0 = float(value)
+            if abs(v0 - 1.5) < 0.01:
+                rule = 1
+            elif abs(v0 - 2.0) < 0.01:
+                rule = 2
+
+        pf.LineSpacingRule = rule
+        v = float(value)
+
+        if rule == WD_LINE_SPACING_MULTIPLE:
+            if 0.25 <= v <= 10.0:
+                pf.LineSpacing = v * 12.0
+            else:
+                pf.LineSpacing = v
+            return
+
+        if rule in (0, 1, 2):
+            if 0.5 <= v <= 3.0:
+                return
+            pf.LineSpacing = v
+            return
+
+        if rule in (3, 4):
+            pf.LineSpacing = v
+            return
+
+        pf.LineSpacing = v
 
     def set_line_spacing_rule(
         self, rng: "CDispatch", rule: Union[str, int], value: Optional[float] = None
@@ -398,14 +456,14 @@ class TextFormatter:
             cm: 厘米数（优先级高于 characters）
         """
         if cm is not None:
-            rng.ParagraphFormat.LeftIndent = rng.Application.CentimetersToPoints(cm)
+            rng.ParagraphFormat.LeftIndent = self._cm_to_pt(cm)
         elif characters is not None:
             rng.ParagraphFormat.LeftIndent = characters
 
     def set_indent_right(self, rng: "CDispatch", characters: Optional[float] = None, cm: Optional[float] = None):
         """设置段落右缩进。"""
         if cm is not None:
-            rng.ParagraphFormat.RightIndent = rng.Application.CentimetersToPoints(cm)
+            rng.ParagraphFormat.RightIndent = self._cm_to_pt(cm)
         elif characters is not None:
             rng.ParagraphFormat.RightIndent = characters
 
@@ -414,7 +472,7 @@ class TextFormatter:
     ):
         """设置首行缩进。传负值向左缩进（悬挂缩进）。"""
         if cm is not None:
-            rng.ParagraphFormat.FirstLineIndent = rng.Application.CentimetersToPoints(cm)
+            rng.ParagraphFormat.FirstLineIndent = self._cm_to_pt(cm)
         elif characters is not None:
             rng.ParagraphFormat.FirstLineIndent = characters
 
@@ -596,15 +654,20 @@ class TextFormatter:
     def get_font_info(self, rng: "CDispatch") -> dict:
         """读取 Range 的字体信息。"""
         f = rng.Font
-        return {
+        result = {
             "name": f.Name,
             "size": f.Size,
             "bold": f.Bold,
             "italic": f.Italic,
             "underline": f.Underline,
             "color": f.Color,
-            "highlight": f.Highlight,
         }
+        # Highlight 属性在部分 Word/COM 环境下不存在，单独保护避免整函数崩溃
+        try:
+            result["highlight"] = f.Highlight
+        except Exception:
+            pass
+        return result
 
     def get_paragraph_format_info(self, rng: "CDispatch") -> dict:
         """读取 Range 的段落格式信息。"""

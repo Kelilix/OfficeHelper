@@ -377,12 +377,15 @@ class QwenProvider(BaseLLMProvider):
             if v is not None
         }
 
+        logger.info("[QwenProvider.chat] 即将发送请求 | model=%s | msgs=%d | extra_body=%s",
+                    self.model, len(chat_messages), extra_body)
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
             stream=kwargs.get("stream", False),
             extra_body=extra_body if extra_body else None,
         )
+        logger.info("[QwenProvider.chat] 收到响应 | type=%s", type(response))
 
         if kwargs.get("stream"):
             return response
@@ -464,7 +467,7 @@ class LLMService:
         将会话历史转换为结构化文本，供 LLM 理解历史上下文。
         格式（按轮次组织）：
           第N轮
-            【用户要求】...
+            （用户整段内容，通常含【用户要求】与【当前状态】）
             【助手决定】...
             【执行结果】✅/❌
               操作: action_name(描述)
@@ -486,7 +489,8 @@ class LLMService:
                 continue
             turn = r.turn
             parts.append(f"第{turn}轮")
-            parts.append(f"  【用户要求】{r.content}")
+            for line in r.content.split("\n"):
+                parts.append(f"  {line}")
 
             # 找对应的 assistant 记录
             if i + 1 < len(records) and records[i + 1].role == "assistant":
@@ -496,10 +500,13 @@ class LLMService:
                 llm_decision = re.sub(r'\s*```$', '', llm_decision, flags=re.MULTILINE)
                 parts.append(f"  【助手决定】{llm_decision}")
 
-                # 解析执行结果（包含初始状态，executed 直接是 list 不需要 json.loads）
-                if isinstance(asst.executed, list):
-                    try:
-                        for e in asst.executed:  # 直接是 list
+                # 解析执行结果（包含初始状态，executed 可能是 list 或 JSON string）
+                try:
+                    executed_list = asst.executed
+                    if isinstance(executed_list, str):
+                        executed_list = json.loads(executed_list)
+                    if isinstance(executed_list, list):
+                        for e in executed_list:
                             bs = e.get("before_state", "")
                             act = e.get("action", "?")
                             desc = e.get("description", "")
@@ -513,8 +520,8 @@ class LLMService:
                                     parts.append(f"    {err}")
                             else:
                                 parts.append(f"  【执行结果】{succ}{err}")
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
             i += 1
         return "\n".join(parts)
 
@@ -532,19 +539,26 @@ class LLMService:
                 return True
             return False
 
-    def update_executed_result(self, session_id: str, executed: list) -> bool:
+    def append_executed_result(self, session_id: str, executed: list) -> bool:
         """
-        将执行结果写入最近一条 assistant 记录，供下一轮对话上下文使用。
-        直接存 list（不转 JSON string），`_build_history_json` 直接取用。
+        将本次执行的 action 结果追加到最近一条 assistant 记录的 executed 字段。
+        在 routes.py execute_action 完成后立即调用，
+        使得本轮历史中就能看到 before_state，无需等下一轮 LLM 调用。
         """
         with self._sessions_lock:
             records = self._sessions.get(session_id, [])
             if not records:
                 return False
             if records[-1].role == "assistant":
-                records[-1].executed = executed  # 直接存 list，不转 JSON string
+                existing = records[-1].executed
+                if isinstance(existing, list) and existing:
+                    records[-1].executed = existing + executed
+                else:
+                    records[-1].executed = executed
                 return True
             return False
+
+    def clear_all_sessions(self) -> None:
         """清空所有会话（服务重启时调用）。"""
         with self._sessions_lock:
             self._sessions.clear()
@@ -643,7 +657,10 @@ class LLMService:
             base_url,
         )
         try:
-            return self._provider.chat(messages, **self._llm_kwargs(stream))
+            logger.info("[LLM] 即将调用 provider.chat()，请注意这个日志之后是否有日志输出...")
+            result = self._provider.chat(messages, **self._llm_kwargs(stream))
+            logger.info("[LLM] provider.chat() 调用完成，返回结果长度=%d", len(result))
+            return result
         except Exception as e:
             err_body = ""
             try:
@@ -727,12 +744,25 @@ class LLMService:
             self._log_response(response, tag="chat")
         return response
 
+    def _save_turn(self, session_id: str, role: str, content: str, **kwargs):
+        """
+        内部方法：将一轮对话追加到历史（供 chat_with_context 内部调用）。
+        不走 add_to_history，避免递归。
+        """
+        with self._sessions_lock:
+            records = self._sessions.get(session_id, [])
+            next_turn = (len(records) // 2) + 1
+            records.append(TurnRecord(turn=next_turn, role=role, content=content, **kwargs))
+            trimmed = self._trim_history(records)
+            self._sessions[session_id] = trimmed
+
     def chat_with_context(
         self,
         user_message: str,
         system_context: str,
         stream: bool = False,
         session_id: str = "default",
+        add_to_history: bool = True,
     ) -> str:
         """
         带完整上下文 + 多轮对话历史的聊天（供 API 路由使用）。
@@ -742,9 +772,9 @@ class LLMService:
             system_context: 完整的系统上下文（包含选区、技能描述等）
             stream: 是否流式输出
             session_id: 会话 ID，用于隔离不同 Word 窗口的对话历史
-
-        Returns:
-            str: 助手回复（JSON action 数组的原始文本）
+            add_to_history: 是否将本轮对话追加到历史记录。
+                            用于处理同一轮用户有多次 LLM 调用的情况
+                            （如先捕获状态再执行），避免历史中出现重复条目。
         """
         records = self._get_session(session_id)
 
@@ -776,24 +806,17 @@ class LLMService:
             # 解析 action description（用于日志/记录）
             action_desc = self._extract_action_description(response)
 
-            # 追加用户轮和助手轮到历史
-            records.append(
-                TurnRecord(turn=next_turn, role="user", content=user_message)
-            )
-            records.append(
-                TurnRecord(
-                    turn=next_turn,
-                    role="assistant",
-                    content=response,
-                    action=response,          # 存完整原始回复
-                    description=action_desc,  # 存解析后的操作摘要
+            if add_to_history:
+                # 追加用户轮和助手轮到历史
+                self._save_turn(
+                    session_id, "user", user_message,
                 )
-            )
-
-            # 裁剪超量历史
-            trimmed = self._trim_history(records)
-            with self._sessions_lock:
-                self._sessions[session_id] = trimmed
+                self._save_turn(
+                    session_id, "assistant", response,
+                    action=response,
+                    description=action_desc,
+                    executed="",  # 新 assistant 记录，executed 初始为空，等 routes.py 来填充
+                )
 
         return response
 

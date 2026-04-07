@@ -117,6 +117,8 @@ const AIChat: React.FC = () => {
   const [loading, setLoading] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  // sessionId 在组件首次挂载时生成，同一窗口内所有消息共享该 ID
+  const [sessionId] = React.useState(() => uuid());
 
   React.useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -142,7 +144,7 @@ const AIChat: React.FC = () => {
         getDocumentName(),
       ]);
 
-      const result = await sendChat(trimmed, selectionText, docName);
+      const result = await sendChat(trimmed, selectionText, docName, sessionId);
 
       const assistantMsg: ChatMessage = {
         id: uuid(),

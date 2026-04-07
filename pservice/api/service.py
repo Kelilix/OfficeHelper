@@ -20,8 +20,6 @@ from core.llm_service import LLMService
 word_service = WordConnector()
 llm_service = LLMService()   # 内部直接读取 config.json 中的 llm 配置
 
-# 尝试自动连接 Word（可选，失败不阻止服务启动）
-try:
-    word_service.connect(visible=True)
-except Exception as e:
-    print(f"[OfficeHelper Service] Word 连接初始化失败: {e}")
+# 尝试自动连接 Word（可选，失败不阻止服务启动）。
+# 注意：即使此处连接失败也没关系——每次 /api/chat 请求时
+# routes.py 会自动检查并重连，确保 Word 在任何时候启动都能被感知。

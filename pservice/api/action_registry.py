@@ -519,7 +519,24 @@ def _h_apply_format_to_range(action: Dict, params: Dict, op: "WordTextOperator",
 
 
 def _h_get_full_text(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:
-    return {"success": True, "result": op.get_full_text()}
+    """返回全文范围信息（start/end），供 rng 占位符自动填充。"""
+    doc = op._base._document
+    if doc is None:
+        try:
+            doc = op._base._word_app.ActiveDocument
+        except Exception:
+            pass
+    if doc is None:
+        return {"success": False, "error": "没有活动 Word 文档"}
+    content = doc.Content
+    return {
+        "success": True,
+        "result": {
+            "text": content.Text,
+            "start": content.Start,
+            "end": content.End,
+        },
+    }
 
 
 def _h_get_text(action: Dict, params: Dict, op: "WordTextOperator") -> Dict[str, Any]:

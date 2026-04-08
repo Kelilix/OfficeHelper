@@ -25,6 +25,49 @@ from .service import word_service, llm_service
 from skills import get_skill_descriptions, get_skill_content, list_skill_names
 from .action_registry import execute_action
 
+# ── 全局配置：纯查询类 action 列表 ─────────────────────────────────────────
+# 这些 action 被判定为「纯查询」，用于以下场景：
+#   1. _substitute_rng_placeholder：跳过 rng 注入
+#   2. all_ranges 收集：收集多位置结果
+#   3. feedback_section：判断是否展示选区列表
+# 新增查询类 action 时，只需在此列表追加即可，无需修改业务逻辑。
+QUERY_ACTIONS = frozenset([
+    # 查找
+    "find_all",                  # 全文查找所有匹配项，返回多位置列表
+    "find",                      # 查找单个匹配项，返回 start/end
+    "find_wildcards",            # 通配符查找
+    "find_with_format",          # 按格式查找
+    # 读取
+    "get_selection_info",        # 获取当前选区信息
+    "get_paragraph_range",       # 获取指定段落范围
+    "get_full_text",             # 获取全文
+    "get_text",                  # 读取文档文本（带 rng）
+    "get_selection_text",        # 读取选中文字
+    "get_paragraph_text",       # 读取段落文本
+    # 统计
+    "count_occurrences",         # 统计出现次数
+    "char_count",                # 统计字符数
+    "word_count",                # 统计单词数
+    "sentence_count",           # 统计句子数
+    "paragraph_count",          # 统计段落数
+    # 书签
+    "list_bookmarks",            # 列出所有书签
+    "get_document_structure",    # 获取文档结构
+    # 段落结构查询
+    "get_outline_summary",       # 获取大纲摘要
+    "find_empty_paragraphs",     # 查找空段落
+    "find_heading_paragraphs",   # 查找标题段落
+    "find_paragraphs_by_level",  # 按级别查找标题
+    "find_paragraphs_by_text",   # 按文本查找段落
+    "get_paragraph_format_info", # 获取段落格式
+    "get_paragraph_style",      # 获取样式名称
+    "get_outline_level",        # 获取大纲级别
+    "is_paragraph_list_item",   # 是否编号列表项
+    "is_paragraph_in_table",    # 是否在表格中
+    "get_list_paragraphs",       # 获取列表段落
+    "get_list_level",           # 获取列表级别
+])
+
 # ── 加载 word-text-operator skill 模块 ────────────────────────────────────────
 # 策略与 main.py 一致：用 importlib.util 逐文件加载，解决相对导入问题
 _project_root = Path(__file__).parent.parent.parent
@@ -518,7 +561,7 @@ def _substitute_rng_placeholder(
             continue
         res = r.get("result")
         action_name = r.get("action", "")
-        if action_name == "find_all" and isinstance(res, list):
+        if action_name in QUERY_ACTIONS and isinstance(res, list):
             # 收集全部位置（按 start,end 去重，防止上游重复 yield）
             seen_pos = set()
             for item in res:
@@ -538,19 +581,13 @@ def _substitute_rng_placeholder(
     # 有多个位置 → 展开所有 action，每个位置执行一次（查询类除外）
     if multiple_ranges:
         rng_literal = "[start, end]"
-        _QUERY_ACTIONS = frozenset((
-            "get_selection_info", "get_full_text", "get_text",
-            "get_paragraph_range", "find", "find_all", "count_occurrences",
-            "list_bookmarks", "char_count", "word_count",
-            "sentence_count", "paragraph_count",
-        ))
         expanded = []
         for a in actions:
             params = dict(a.get("params", {}))
             rng_val = params.get("rng")
             aname = a.get("action", "")
             # 查询类 action 只执行一次（取当前位置），其余 action 每个位置展开一条
-            if aname in _QUERY_ACTIONS:
+            if aname in QUERY_ACTIONS:
                 logger.info("[rng_skip] 查询类 action 不展开 | action=%s", aname)
                 resolved_a = {**a}
                 if rng_val == rng_literal:
@@ -664,7 +701,7 @@ def _build_prompt_execute(
             res = r.get("result")
             if isinstance(res, dict) and "matches" in res:
                 all_ranges.extend(res["matches"])
-            elif r.get("action") == "find_all" and isinstance(res, list):
+            elif r.get("action") in QUERY_ACTIONS and isinstance(res, list):
                 seen_fb = set()
                 for item in res:
                     if isinstance(item, dict) and "start" in item and "end" in item:
@@ -686,7 +723,7 @@ def _build_prompt_execute(
                     info += " → 选区: %d~%d" % (res["start"], res["end"])
                 elif "matches" in res:
                     info += " → 查找到 %d 处" % len(res["matches"])
-            elif res and isinstance(res, list) and a == "find_all":
+            elif res and isinstance(res, list) and a in QUERY_ACTIONS:
                 uniq = []
                 s2 = set()
                 for it in res:
@@ -725,10 +762,11 @@ def _build_prompt_execute(
                 "**强制要求**：\n"
                 "  - 选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）**只属于当前 step 内**的后续 action，\n"
                 "    **不可跨 step 使用**。其他 step 的选区结果与本 step 无关。\n"
-                "  - 本 step 仍需先查询选区（除非操作「全文」），然后再执行操作：\n"
+                "  - 本 step 仍需先查询选区，然后再执行操作：\n"
                 '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
                 '    · 操作「选中部分」-> get_selection_info()\n'
-                '    · 操作「全文」-> 不需要 rng\n'
+                '    · 操作「全文」-> get_full_text() 获取全文范围\n'
+                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
                 "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
             )
         else:
@@ -738,7 +776,8 @@ def _build_prompt_execute(
                 "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
                 '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
                 '    · 操作「选中部分」-> get_selection_info()\n'
-                '    · 操作「全文」-> 不需要 rng\n'
+                '    · 操作「全文」-> get_full_text() 获取全文范围\n'
+                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
                 "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
             )
         hint_section = (
@@ -795,15 +834,15 @@ def _build_prompt_execute(
             '  {"action": "set_font_size", "params": {"size": 12.0}, "description": "设为小四"}'
         )
     else:
+        # 首次规划，无上一步 → 必须先查询再操作，示例包含完整的「查询→操作」链
         task_step2_line = (
             "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
-            "3. 若当前 step 不是纯查询类 action（如 find_all、get_xxx），则第一步必须调用选区查询 action。\n"
-            "4. 后续格式类 action 的 rng 不要填写，系统会自动用第一步的查询结果填充。"
+            "3. 第一步必须调用选区查询 action（get_xxx），后续 action 的 rng 不要填写，系统会自动填充。"
         ) % (step_num, total_steps)
-        # step1 纯查询 → 示例改为 find_all，不应出现 set_xxx
         rng_example = (
-            '  {"action": "find_all", "params": {"text": "关键词"}, "description": "全文查找关键词"}\n'
-            '  {"action": "get_selection_info", "params": {}, "description": "获取当前选区信息"}'
+            '  {"action": "get_full_text", "params": {}, "description": "获取全文范围"}\n'
+            '  {"action": "set_font_name", "params": {"font_name": "宋体"}, "description": "设为宋体"}\n'
+            '  {"action": "set_font_size", "params": {"size": 12.0}, "description": "设为小四"}'
         )
     task_block = (
         "\n## 你的任务\n"
@@ -828,10 +867,11 @@ def _build_prompt_execute(
             "  - **重要**：选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）\n"
             "    **只属于当前 step 内**的后续 action，**不可跨 step 使用**。\n"
             "    其他 step（如 step1）的选区结果与本 step 无关，本 step 必须自行查询。\n"
-            "  - 若本 step 操作「全文」，则不需要 rng 参数。\n"
-            "  - 若操作「第N段」或「选中部分」，则第一步必须调用对应的选区查询 action：\n"
+            "  - 第一步必须调用选区查询 action：\n"
             "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
             "    · 操作「选中部分」-> get_selection_info()\n"
+            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
+            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
             "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
         )
     else:
@@ -841,7 +881,8 @@ def _build_prompt_execute(
             "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
             "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
             "    · 操作「选中部分」-> get_selection_info()\n"
-            "    · 操作「全文」-> 不需要 rng\n"
+            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
+            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
             "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
         )
     task_block += requirement_note + "\n"
@@ -869,7 +910,11 @@ def _build_prompt_execute(
         # prev_step_feedback 且无 all_ranges：跨 step 选区结果不可复用，本 step 必须自行查询
         query_note = (
             "2. **step 类型限制**：\n"
-            "  - **必须**在当前 step 内添加选区查询 action（除非操作全文）。\n"
+            "  - **必须**在当前 step 内添加选区查询 action：\n"
+            "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
+            "    · 操作「选中部分」-> get_selection_info()\n"
+            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
+            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
             "    选区查询结果只属于当前 step，**不可**使用其他 step 的选区结果。\n"
         )
         task_block += query_note + "\n"

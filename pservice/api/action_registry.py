@@ -1491,6 +1491,618 @@ def _h_select_paragraph_range(action: Dict, params: Dict, op: "WordTextOperator"
         return {"success": False, "error": str(e)}
 
 
+# ── word-page-operator 页面操作 handlers ──────────────────────────────────────
+
+def _h_get_section_count(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """节总数。"""
+    if page_op is None:
+        return {"action": "get_section_count", "description": "获取节总数", "success": False, "error": "PageOperator 未初始化"}
+    return {"success": True, "result": page_op.count()}
+
+
+def _h_get_section_by_index(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """按索引获取节。"""
+    if page_op is None:
+        return {"action": "get_section_by_index", "description": "按索引获取节", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        sec = page_op.get(idx)
+        return {"success": True, "result": page_op.get_index(sec)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_current_section_index(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """获取光标所在节的索引。"""
+    if page_op is None:
+        return {"action": "get_current_section_index", "description": "获取光标所在节", "success": False, "error": "PageOperator 未初始化"}
+    return {"success": True, "result": page_op.section.get_current_section_index()}
+
+
+def _h_get_page_setup_info(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取完整页面设置信息。"""
+    if page_op is None:
+        return {"action": "get_page_setup_info", "description": "读取页面设置", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_page_setup_info(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_page_margins(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取页边距。"""
+    if page_op is None:
+        return {"action": "get_page_margins", "description": "读取页边距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_page_margins(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_paper_size(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取纸张大小。"""
+    if page_op is None:
+        return {"action": "get_paper_size", "description": "读取纸张大小", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_paper_size(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_orientation(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取纸张方向。"""
+    if page_op is None:
+        return {"action": "get_orientation", "description": "读取纸张方向", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_orientation(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_column_count(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取分栏数。"""
+    if page_op is None:
+        return {"action": "get_column_count", "description": "读取分栏数", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_column_count(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_column_info(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取分栏详情。"""
+    if page_op is None:
+        return {"action": "get_column_info", "description": "读取分栏详情", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_column_info(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_section_start_type(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取节起始类型。"""
+    if page_op is None:
+        return {"action": "get_section_start_type", "description": "读取节起始类型", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.section.get_section_start_type(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_page_margins(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置页边距。"""
+    if page_op is None:
+        return {"action": "set_page_margins", "description": "设置页边距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_page_margins(
+            idx,
+            top=float(params["top"]) if params.get("top") is not None else None,
+            bottom=float(params["bottom"]) if params.get("bottom") is not None else None,
+            left=float(params["left"]) if params.get("left") is not None else None,
+            right=float(params["right"]) if params.get("right") is not None else None,
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_page_margins_by_inch(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """用英寸设置页边距。"""
+    if page_op is None:
+        return {"action": "set_page_margins_by_inch", "description": "英寸设置页边距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_page_margins_by_inch(
+            idx,
+            top=float(params["top"]) if params.get("top") is not None else None,
+            bottom=float(params["bottom"]) if params.get("bottom") is not None else None,
+            left=float(params["left"]) if params.get("left") is not None else None,
+            right=float(params["right"]) if params.get("right") is not None else None,
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_page_margins_preset(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """使用预设方案设置页边距。"""
+    if page_op is None:
+        return {"action": "set_page_margins_preset", "description": "预设页边距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    preset = params.get("preset", "normal")
+    try:
+        page_op.set_page_margins_preset(idx, preset)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_paper_size(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置纸张大小。"""
+    if page_op is None:
+        return {"action": "set_paper_size", "description": "设置纸张大小", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_paper_size(
+            idx,
+            width=float(params["width"]),
+            height=float(params["height"]),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_paper_size_preset(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """使用预设纸张类型。"""
+    if page_op is None:
+        return {"action": "set_paper_size_preset", "description": "预设纸张", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    preset = params.get("preset", "A4")
+    try:
+        page_op.set_paper_size_preset(idx, preset)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_orientation(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置纸张方向。"""
+    if page_op is None:
+        return {"action": "set_orientation", "description": "设置纸张方向", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    orient = params.get("orientation", "portrait")
+    try:
+        page_op.set_orientation(idx, orient)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_columns(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置分栏数。"""
+    if page_op is None:
+        return {"action": "set_columns", "description": "设置分栏数", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    count = int(params.get("count", 1))
+    equal = bool(params.get("equal_width", True))
+    try:
+        page_op.set_columns(idx, count, equal_width=equal)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_columns_with_gutter(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置分栏数并指定栏间距。"""
+    if page_op is None:
+        return {"action": "set_columns_with_gutter", "description": "设置栏间距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    count = int(params.get("count", 1))
+    spacing = float(params.get("spacing", 0.75))
+    equal = bool(params.get("equal_width", True))
+    try:
+        page_op.set_columns_with_gutter(idx, count, spacing, equal_width=equal)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_columns_equal_width(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设为等宽栏。"""
+    if page_op is None:
+        return {"action": "set_columns_equal_width", "description": "等宽栏", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_columns_equal_width(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_column_width(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置指定栏的宽度。"""
+    if page_op is None:
+        return {"action": "set_column_width", "description": "设置栏宽", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    column = int(params.get("column", 1))
+    width = float(params.get("width", 8.0))
+    try:
+        page_op.page.set_column_width(idx, column, width)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_apply_two_column_layout(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """应用两栏布局。"""
+    if page_op is None:
+        return {"action": "apply_two_column_layout", "description": "两栏布局", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    with_line = bool(params.get("with_line", True))
+    try:
+        page_op.apply_two_column_layout(idx, with_line)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_delete_section_break(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """删除指定节前面的分节符，或删除所有分节符（index=0）。"""
+    if page_op is None:
+        return {"action": "delete_section_break", "description": "删除分节符", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 0))
+    try:
+        page_op.delete_section_break(idx)
+        if idx == 0:
+            return {"success": True, "result": "已删除所有分节符，文档合并为单节"}
+        return {"success": True, "result": f"已删除第 {idx} 节前的分节符"}
+    except Exception as e:
+        return {"action": "delete_section_break", "description": "删除分节符", "success": False, "error": str(e)}
+
+
+def _h_insert_section_break(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """插入分节符。"""
+    if page_op is None:
+        return {"action": "insert_section_break", "description": "插入分节符", "success": False, "error": "PageOperator 未初始化"}
+    rng_param = params.get("rng")
+    if rng_param:
+        rng = _resolve_rng(op, rng_param)
+    else:
+        rng = op.selection
+    break_type = params.get("type", "new_page")
+    try:
+        page_op.insert_section_break(rng, break_type)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_section_start_type(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置节起始类型。"""
+    if page_op is None:
+        return {"action": "set_section_start_type", "description": "设置节起始类型", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    type_str = params.get("type", "new_page")
+    try:
+        page_op.set_section_start_type(idx, type_str)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_section_start_new_page(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """节从新页开始。"""
+    if page_op is None:
+        return {"action": "set_section_start_new_page", "description": "节从新页开始", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_section_start_new_page(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_section_start_continuous(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """节设为连续。"""
+    if page_op is None:
+        return {"action": "set_section_start_continuous", "description": "连续节", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_section_start_continuous(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_first_page_different(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置首页不同。"""
+    if page_op is None:
+        return {"action": "set_first_page_different", "description": "首页不同", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    on = bool(params.get("on", True))
+    try:
+        page_op.set_first_page_different(idx, on)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_odd_and_even_pages(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置奇偶页不同。"""
+    if page_op is None:
+        return {"action": "set_odd_and_even_pages", "description": "奇偶页不同", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    on = bool(params.get("on", True))
+    try:
+        page_op.set_odd_and_even_pages(idx, on)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_insert_line_break(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """插入换行符。"""
+    rng = _resolve_rng(op, params.get("rng"))
+    rng.InsertBreak(Type=6)  # wdLineBreak = 6
+    return {"success": True}
+
+
+def _h_insert_column_break(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """插入栏分隔符。"""
+    rng = _resolve_rng(op, params.get("rng"))
+    rng.InsertBreak(Type=8)  # wdColumnBreak = 8
+    return {"success": True}
+
+
+def _h_remove_page_break(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """移除分页符。"""
+    rng_param = params.get("rng")
+    rng = _resolve_rng(op, rng_param) if rng_param else op.selection
+    rng.Collapse(Direction=0)
+    rng.MoveRight(Unit=1, Count=1)
+    return {"success": True}
+
+
+def _h_get_page_count(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """获取总页数。"""
+    if page_op is None:
+        return {"action": "get_page_count", "description": "获取总页数", "success": False, "error": "PageOperator 未初始化"}
+    return {"success": True, "result": page_op.get_page_count()}
+
+
+def _h_get_page_of_range(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """获取 Range 所在页码。"""
+    if page_op is None:
+        return {"action": "get_page_of_range", "description": "获取所在页码", "success": False, "error": "PageOperator 未初始化"}
+    rng = _resolve_rng(op, params.get("rng"))
+    return {"success": True, "result": page_op.get_page_of_range(rng)}
+
+
+def _h_set_header(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置页眉。"""
+    if page_op is None:
+        return {"action": "set_header", "description": "设置页眉", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_header(
+            idx,
+            position=params.get("position", "primary"),
+            text=params.get("text", ""),
+            alignment=params.get("alignment", "left"),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_header(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取页眉。"""
+    if page_op is None:
+        return {"action": "get_header", "description": "读取页眉", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_header(idx, params.get("position", "primary"))}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_clear_header(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """清除页眉。"""
+    if page_op is None:
+        return {"action": "clear_header", "description": "清除页眉", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.clear_header(idx, params.get("position", "primary"))
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_footer(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置页脚。"""
+    if page_op is None:
+        return {"action": "set_footer", "description": "设置页脚", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_footer(
+            idx,
+            position=params.get("position", "primary"),
+            text=params.get("text", ""),
+            alignment=params.get("alignment", "left"),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_footer(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取页脚。"""
+    if page_op is None:
+        return {"action": "get_footer", "description": "读取页脚", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_footer(idx, params.get("position", "primary"))}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_clear_footer(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """清除页脚。"""
+    if page_op is None:
+        return {"action": "clear_footer", "description": "清除页脚", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.clear_footer(idx, params.get("position", "primary"))
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_insert_page_number_in_header(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """在页眉中插入页码。"""
+    if page_op is None:
+        return {"action": "insert_page_number_in_header", "description": "页眉插入页码", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.insert_page_number_in_header(
+            idx,
+            position=params.get("position", "primary"),
+            alignment=params.get("alignment", "right"),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_insert_page_number_in_footer(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """在页脚中插入页码。"""
+    if page_op is None:
+        return {"action": "insert_page_number_in_footer", "description": "页脚插入页码", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.insert_page_number_in_footer(
+            idx,
+            position=params.get("position", "primary"),
+            alignment=params.get("alignment", "center"),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_vertical_alignment(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置页面垂直对齐。"""
+    if page_op is None:
+        return {"action": "set_vertical_alignment", "description": "设置垂直对齐", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    align = params.get("align", "top")
+    try:
+        page_op.set_vertical_alignment(idx, align)
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_page_border(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置页面边框。"""
+    if page_op is None:
+        return {"action": "set_page_border", "description": "设置页面边框", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_page_border(
+            idx,
+            side=params.get("side", "all"),
+            line_style=int(params.get("line_style", 1)),
+            line_width=int(params.get("line_width", 6)),
+            color=params.get("color", 0x000000),
+        )
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_clear_page_border(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """清除页面边框。"""
+    if page_op is None:
+        return {"action": "clear_page_border", "description": "清除页面边框", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.clear_page_border(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_set_page_shading(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """设置整页背景色。"""
+    if page_op is None:
+        return {"action": "set_page_shading", "description": "设置页面背景", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.set_page_shading(idx, fill_color=params.get("fill_color", 0xCCE8FF))
+        return {"success": True}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_clear_page_shading(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """清除页面背景色。"""
+    if page_op is None:
+        return {"action": "clear_page_shading", "description": "清除页面背景", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.clear_page_shading(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_apply_page_setup_to_all(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """将页面设置应用到所有节。"""
+    if page_op is None:
+        return {"action": "apply_page_setup_to_all", "description": "应用到全文", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        n = page_op.apply_page_setup_to_all(idx)
+        return {"success": True, "result": n}
+    except (IndexError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_copy_page_setup(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """复制页面设置。"""
+    if page_op is None:
+        return {"action": "copy_page_setup", "description": "复制页面设置", "success": False, "error": "PageOperator 未初始化"}
+    from_idx = int(params.get("from_index", 1))
+    to_idx = int(params.get("to_index", 2))
+    try:
+        ok = page_op.copy_page_setup(from_idx, to_idx)
+        return {"success": ok}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_reset_page_setup(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """重置页面设置。"""
+    if page_op is None:
+        return {"action": "reset_page_setup", "description": "重置页面设置", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        page_op.reset_page_setup(idx)
+        return {"success": True}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
 # ── Action 注册表 ─────────────────────────────────────────────────────────────
 # target: ("op_attr", None) 表示 op.attr.method()
 #         ("op_attr", "sub_attr") 表示 op.attr.sub_attr.method()
@@ -1675,13 +2287,157 @@ ACTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     "get_paragraph_at_selection": {"handler": _h_get_paragraph_at_selection},
     "select_paragraph":           {"handler": _h_select_paragraph},
     "select_paragraph_range":    {"handler": _h_select_paragraph_range},
+
+    # ── word-page-operator 页面操作 ──────────────────────────────────────────
+    # 节基础访问
+    "get_section_count":             {"handler": _h_get_section_count},
+    "get_section_by_index":          {"handler": _h_get_section_by_index},
+    "get_current_section_index":     {"handler": _h_get_current_section_index},
+    # 页面设置读取
+    "get_page_setup_info":           {"handler": _h_get_page_setup_info},
+    "get_page_margins":              {"handler": _h_get_page_margins},
+    "get_paper_size":               {"handler": _h_get_paper_size},
+    "get_orientation":              {"handler": _h_get_orientation},
+    "get_column_count":             {"handler": _h_get_column_count},
+    "get_column_info":              {"handler": _h_get_column_info},
+    "get_section_start_type":       {"handler": _h_get_section_start_type},
+    # 页边距设置
+    "set_page_margins":             {"handler": _h_set_page_margins},
+    "set_page_margins_by_inch":     {"handler": _h_set_page_margins_by_inch},
+    "set_page_margins_preset":      {"handler": _h_set_page_margins_preset},
+    # 纸张设置
+    "set_paper_size":               {"handler": _h_set_paper_size},
+    "set_paper_size_preset":       {"handler": _h_set_paper_size_preset},
+    "set_orientation":              {"handler": _h_set_orientation},
+    # 分栏操作
+    "set_columns":                  {"handler": _h_set_columns},
+    "set_columns_with_gutter":      {"handler": _h_set_columns_with_gutter},
+    "set_columns_equal_width":      {"handler": _h_set_columns_equal_width},
+    "set_column_width":             {"handler": _h_set_column_width},
+    "apply_two_column_layout":      {"handler": _h_apply_two_column_layout},
+    # 分节符
+    "delete_section_break":          {"handler": _h_delete_section_break},
+    "insert_section_break":         {"handler": _h_insert_section_break},
+    "set_section_start_type":       {"handler": _h_set_section_start_type},
+    "set_section_start_new_page":   {"handler": _h_set_section_start_new_page},
+    "set_section_start_continuous":  {"handler": _h_set_section_start_continuous},
+    "set_first_page_different":     {"handler": _h_set_first_page_different},
+    "set_odd_and_even_pages":       {"handler": _h_set_odd_and_even_pages},
+    # 分页控制
+    "insert_line_break":           {"handler": _h_insert_line_break},
+    "insert_column_break":          {"handler": _h_insert_column_break},
+    "remove_page_break":           {"handler": _h_remove_page_break},
+    "get_page_count":               {"handler": _h_get_page_count},
+    "get_page_of_range":            {"handler": _h_get_page_of_range},
+    # 页眉页脚
+    "set_header":                   {"handler": _h_set_header},
+    "get_header":                   {"handler": _h_get_header},
+    "clear_header":                 {"handler": _h_clear_header},
+    "set_footer":                   {"handler": _h_set_footer},
+    "get_footer":                   {"handler": _h_get_footer},
+    "clear_footer":                 {"handler": _h_clear_footer},
+    "insert_page_number_in_header": {"handler": _h_insert_page_number_in_header},
+    "insert_page_number_in_footer": {"handler": _h_insert_page_number_in_footer},
+    # 页面级格式
+    "set_vertical_alignment":       {"handler": _h_set_vertical_alignment},
+    "set_page_border":              {"handler": _h_set_page_border},
+    "clear_page_border":            {"handler": _h_clear_page_border},
+    "set_page_shading":             {"handler": _h_set_page_shading},
+    "clear_page_shading":           {"handler": _h_clear_page_shading},
+    # 文档级操作
+    "apply_page_setup_to_all":      {"handler": _h_apply_page_setup_to_all},
+    "copy_page_setup":              {"handler": _h_copy_page_setup},
+    "reset_page_setup":             {"handler": _h_reset_page_setup},
 }
+
+
+# ── word-page-operator 页面操作 handlers ──────────────────────────────────────
+
+def _h_get_section_count(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """节总数。"""
+    if page_op is None:
+        return {"action": "get_section_count", "description": "获取节总数", "success": False, "error": "PageOperator 未初始化"}
+    return {"success": True, "result": page_op.count()}
+
+
+def _h_get_section_by_index(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """按索引获取节。"""
+    if page_op is None:
+        return {"action": "get_section_by_index", "description": "按索引获取节", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        sec = page_op.get(idx)
+        return {"success": True, "result": page_op.get_index(sec)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_current_section_index(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """获取光标所在节的索引。"""
+    if page_op is None:
+        return {"action": "get_current_section_index", "description": "获取光标所在节", "success": False, "error": "PageOperator 未初始化"}
+    return {"success": True, "result": page_op.section.get_current_section_index()}
+
+
+def _h_get_page_setup_info(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取完整页面设置信息。"""
+    if page_op is None:
+        return {"action": "get_page_setup_info", "description": "读取页面设置", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_page_setup_info(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_page_margins(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取页边距。"""
+    if page_op is None:
+        return {"action": "get_page_margins", "description": "读取页边距", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_page_margins(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_paper_size(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取纸张大小。"""
+    if page_op is None:
+        return {"action": "get_paper_size", "description": "读取纸张大小", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_paper_size(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_orientation(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取纸张方向。"""
+    if page_op is None:
+        return {"action": "get_orientation", "description": "读取纸张方向", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_orientation(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _h_get_column_count(action: Dict, params: Dict, op: "WordTextOperator", page_op=None) -> Dict[str, Any]:
+    """读取分栏数。"""
+    if page_op is None:
+        return {"action": "get_column_count", "description": "读取分栏数", "success": False, "error": "PageOperator 未初始化"}
+    idx = int(params.get("index", 1))
+    try:
+        return {"success": True, "result": page_op.get_column_count(idx)}
+    except IndexError as e:
+        return {"success": False, "error": str(e)}
 
 
 # ── 分发器 ─────────────────────────────────────────────────────────────────────
 
 def execute_action(action: Dict[str, Any], op: Optional["WordTextOperator"] = None,
-                  para_op=None) -> Dict[str, Any]:
+                  para_op=None, page_op=None) -> Dict[str, Any]:
     """
     根据 action["action"] 从注册表查到映射，构造参数，调用对应方法。
 
@@ -1714,7 +2470,11 @@ def execute_action(action: Dict[str, Any], op: Optional["WordTextOperator"] = No
                 before_state_text = _human_readable_state(state_type, before_state_raw) if before_state_raw else ""
 
             sig = inspect.signature(spec["handler"])
-            handler_kwargs = {"para_op": para_op} if "para_op" in sig.parameters else {}
+            handler_kwargs = {}
+            if "para_op" in sig.parameters:
+                handler_kwargs["para_op"] = para_op
+            if "page_op" in sig.parameters:
+                handler_kwargs["page_op"] = page_op
             result = spec["handler"](action, params, op, **handler_kwargs)
             result.setdefault("success", True)
             result.setdefault("action", action_type)

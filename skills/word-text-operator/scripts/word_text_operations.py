@@ -30,6 +30,15 @@ WD_WORD = 2
 WD_SENTENCE = 3
 WD_PARAGRAPH = 4
 
+# WdStatistic — Range.ComputeStatistics(Statistic)，见 Word VBA 文档
+WD_STAT_WORDS = 0
+WD_STAT_LINES = 1
+WD_STAT_PAGES = 2
+WD_STAT_CHARS = 3
+WD_STAT_PARAGRAPHS = 4
+WD_STAT_CHARS_WITH_SPACES = 5
+WD_STAT_FAR_EAST_CHARS = 6
+
 
 class TextOperator:
     """文本内容操作封装。"""
@@ -232,34 +241,25 @@ class TextOperator:
     # 统计
     # ========================================================================
 
-    def char_count(self, rng: "CDispatch", include_spaces: bool = False) -> int:
-        """
-        统计 Range 内的字符数。
-
-        Args:
-            include_spaces: 是否包含空格
-        """
-        return rng.ComputeStatistics(Stat=2, IncludeFootnotesAndEndnotes=include_spaces)
-        # wdStatisticCharacters = 2
+    def char_count(self, rng: "CDispatch") -> int:
+        """统计 Range 内的字符数（不计空格）。"""
+        return rng.ComputeStatistics(WD_STAT_CHARS)
 
     def word_count(self, rng: "CDispatch") -> int:
         """统计 Range 内的单词数。"""
-        return rng.ComputeStatistics(Stat=4)
-        # wdStatisticWords = 4
+        return rng.ComputeStatistics(WD_STAT_WORDS)
 
     def sentence_count(self, rng: "CDispatch") -> int:
-        """统计 Range 内的句子数。"""
-        return rng.ComputeStatistics(Stat=3)
-        # wdStatisticSentences = 3
+        """统计 Range 内的句子数（ComputeStatistics 无句子项，用 Sentences 集合）。"""
+        return rng.Sentences.Count
 
     def paragraph_count(self, rng: "CDispatch") -> int:
         """统计 Range 内的段落数。"""
-        return rng.ComputeStatistics(Stat=5)
-        # wdStatisticParagraphs = 5
+        return rng.ComputeStatistics(WD_STAT_PARAGRAPHS)
 
     def line_count(self, rng: "CDispatch") -> int:
         """统计 Range 内的行数。"""
-        return rng.ComputeStatistics(Stat=1)
+        return rng.ComputeStatistics(WD_STAT_LINES)
         # wdStatisticLines = 1
 
     # ========================================================================

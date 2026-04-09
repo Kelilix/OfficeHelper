@@ -1,22 +1,21 @@
-core/__pycache__/__init__.cpython-314.pyc
-core/__pycache__/config.cpython-314.pyc
-core/__pycache__/llm_service.cpython-314.pyc
-core/__pycache__/settings.cpython-314.pyc
-core/__pycache__/word_connector.cpython-314.pyc
-pservice/__pycache__/main.cpython-314.pyc
-pservice/api/__pycache__/__init__.cpython-314.pyc
-pservice/api/__pycache__/action_registry.cpython-314.pyc
-pservice/api/__pycache__/routes.cpython-314.pyc
-pservice/api/__pycache__/service.cpython-314.pyc
-skills/__pycache__/__init__.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/__init__.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_base.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_bookmark.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_find_replace.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_format.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_range_navigation.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_selection.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_text_operations.cpython-314.pyc
-skills/word-text-operator/scripts/__pycache__/word_text_operator.cpython-314.pyc
-config.json
-config.json
+# ─── Python ─────────────────────────────────────────────────────────────────
+# 字节码缓存（通配写法，不依赖 Python 版本）
+__pycache__/
+*.py[cod]
+*.pyc
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 打包 / 启动脚本（由 build_launcher.py / launcher.py 自生成，不应入仓）
+launcher.py
+build_launcher.py
+
+# ─── Node.js ────────────────────────────────────────────────────────────────
+# 前端 add-in 依赖（由 npm install 生成，运行时由 CDN / 开发者环境提供）
+word-addin/wordassistant/node_modules/
+
+# webpack 构建产物（由 npm run build 生成，随 launcher 一起分发）
+word-addin/wordassistant/dist/

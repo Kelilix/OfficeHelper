@@ -14,12 +14,7 @@ app = FastAPI(
 # CORS：允许 Office.js (Edge WebView) 从 localhost:3000 访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://localhost:3000",
-        "https://127.0.0.1:3000",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

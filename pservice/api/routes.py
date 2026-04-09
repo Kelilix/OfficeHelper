@@ -120,6 +120,52 @@ _ensure_wto_module()
 from scripts.word_text_operator import WordTextOperator
 
 
+def _ensure_wpo_module():
+    """确保 PageOperator 已加载到 sys.modules。"""
+    key = "scripts.word_page_operator"
+    if key in sys.modules:
+        return
+    scripts_dir = _project_root / "skills" / "word-page-operator" / "scripts"
+    _scripts_parent = Path(__file__).parent.parent.parent / "skills" / "word-page-operator"
+    if str(_scripts_parent) not in sys.path:
+        sys.path.insert(0, str(_scripts_parent))
+
+    submodules = ["word_page_operator_base", "word_section_operator"]
+    import importlib.util
+
+    for sub in submodules:
+        sub_file = scripts_dir / f"{sub}.py"
+        if not sub_file.exists():
+            continue
+        sub_name = f"scripts.{sub}"
+        if sub_name in sys.modules:
+            continue
+        spec = importlib.util.spec_from_file_location(sub_name, sub_file)
+        if spec is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[sub_name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            pass
+
+    main_file = scripts_dir / "word_page_operator.py"
+    if main_file.exists():
+        spec = importlib.util.spec_from_file_location(key, main_file)
+        if spec is not None:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[key] = mod
+            try:
+                spec.loader.exec_module(mod)
+            except Exception:
+                pass
+
+
+_ensure_wpo_module()
+from scripts.word_page_operator import PageOperator
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -229,12 +275,36 @@ def chat(req: ChatRequest) -> ChatResponse:
                     "[/api/chat] 读取格式状态失败（可能是 Word 已关闭或 COM 连接失效）: %s", e
                 )
 
-        logger.info("[/api/chat] >>> Step 4: Plan 阶段 - 调用 LLM 决定技能和拆分")
+        # ── Step 2b: 初始化 PageOperator（用于页面设置操作 + 全文统计） ───────────
+        page_op = None
+        if op and op._base._word_app is not None:
+            try:
+                page_op = PageOperator(op._base)
+            except Exception as e:
+                logger.warning("[/api/chat] PageOperator init failed: %s", e)
+
+        # ── Step 2c: 收集全文统计信息（供 Plan/Execute 阶段 LLM 参考） ────────────
+        doc_stats = {}
+        if op and op._base._word_app is not None:
+            try:
+                rng_full = op._base.document.Content
+                doc_stats["总字数"] = op.text.char_count(rng_full)
+                doc_stats["总段落数"] = op.text.paragraph_count(rng_full)
+            except Exception as e:
+                logger.warning("[/api/chat] 收集 doc_stats 失败: %s", e)
+        if page_op:
+            try:
+                doc_stats["总节数"] = page_op.get_section_count()
+                doc_stats["总页数"] = page_op.get_page_count()
+            except Exception as e:
+                logger.warning("[/api/chat] 收集 page_op stats 失败: %s", e)
+
         # ── Step 3: Plan 阶段 - 决定每个 step 的技能和拆分 ────────────────────
         skills_desc = get_skill_descriptions()
         prompt_plan = _build_prompt_plan_select(
             req.message, current_selection, skills_desc,
             current_format_state=current_format_state,
+            doc_stats=doc_stats,
         )
         logger.info("[/api/chat] >>> Step 4: 实际调用 LLM（Plan），即将阻塞等待响应...")
         llm_plan_resp = llm_service.chat_with_context(
@@ -276,7 +346,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             except Exception as e:
                 logger.warning("[/api/chat] ParagraphOperator init failed: %s", e)
 
-        # ── Step 5: 循环执行每个 step ────────────────────────────────────────
+        # ── Step 7: 循环执行每个 step ────────────────────────────────────────
         executed_all = []
         prev_results = []
         prev_step_feedback = []   # 上一步的 feedback，供下一步 prompt 使用
@@ -301,6 +371,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             prompt_exec = _build_prompt_execute(
                 req.message, current_selection, skill_name, skill_content,
                 current_format_state,
+                doc_stats=doc_stats,
                 selection_hint=step_selection_hint,
                 prev_executed=prev_results,
                 step_num=step_num,
@@ -334,7 +405,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             for action in actions:
                 expanded = _substitute_rng_placeholder([action], step_prev)
                 for sub_action in expanded:
-                    result = execute_action(sub_action, op, para_op=para_op)
+                    result = execute_action(sub_action, op, para_op=para_op, page_op=page_op)
                     result["step"] = step_num
                     result["skill"] = skill_name
                     executed_all.append(result)
@@ -439,8 +510,10 @@ def _build_prompt_plan_select(
     user_message: str, selection_text: str,
     all_skills_desc: str,
     current_format_state: str = "",
+    doc_stats: dict = None,
 ) -> str:
     """Plan 阶段：LLM 决定每步的技能和拆分意图（不声明选区范围）。"""
+    doc_stats = doc_stats or {}
     selection_block = (
         f"用户选中了以下内容：\n---\n{selection_text}\n---\n\n"
         if selection_text
@@ -451,9 +524,18 @@ def _build_prompt_plan_select(
         if current_format_state.strip()
         else ""
     )
+    doc_stats_lines = []
+    if doc_stats:
+        for key, value in doc_stats.items():
+            doc_stats_lines.append(f"  {key}: {value}")
+    doc_stats_section = (
+        "## 全文状态\n---\n"
+        + ("\n".join(doc_stats_lines) if doc_stats_lines else "  （暂无统计信息）")
+        + "\n---\n\n"
+    )
     return f"""你是一个 Word 文档操作规划助手。
 
-{selection_block}{state_section}## 用户的需求
+{selection_block}{state_section}{doc_stats_section}## 用户的需求
 "{user_message}"
 
 ## 可用技能列表
@@ -672,6 +754,7 @@ def _build_prompt_select(user_message: str, selection_text: str, skills_desc: st
 def _build_prompt_execute(
     user_message: str, selection_text: str, skill_name: str, skill_content: str,
     current_format_state: str = "",
+    doc_stats: dict = None,
     selection_hint: str = "",
     prev_executed: list = None,
     step_num: int = 1,
@@ -682,8 +765,18 @@ def _build_prompt_execute(
     prev_executed = prev_executed or []
     step_def = step_def or {}
     prev_step_feedback = prev_step_feedback or []
+    doc_stats = doc_stats or {}
 
     sf = current_format_state.strip() if current_format_state.strip() else "（未读取到有效格式，以用户消息中【当前状态】块为准）"
+    doc_stats_lines = []
+    if doc_stats:
+        for key, value in doc_stats.items():
+            doc_stats_lines.append(f"  {key}: {value}")
+    doc_stats_section = (
+        "\n\n## 全文状态\n---\n"
+        + ("\n".join(doc_stats_lines) if doc_stats_lines else "  （暂无统计信息）")
+        + "\n---\n"
+    )
     format_section = (
         "\n\n## 当前选中内容的格式状态\n（以下是你决策时的参考起始状态）\n---\n"
         + sf + "\n---\n"
@@ -767,6 +860,8 @@ def _build_prompt_execute(
                 '    · 操作「选中部分」-> get_selection_info()\n'
                 '    · 操作「全文」-> get_full_text() 获取全文范围\n'
                 '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
+                "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
+                "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
                 "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
             )
         else:
@@ -778,6 +873,8 @@ def _build_prompt_execute(
                 '    · 操作「选中部分」-> get_selection_info()\n'
                 '    · 操作「全文」-> get_full_text() 获取全文范围\n'
                 '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
+                "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
+                "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
                 "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
             )
         hint_section = (
@@ -883,7 +980,9 @@ def _build_prompt_execute(
             "    · 操作「选中部分」-> get_selection_info()\n"
             "    · 操作「全文」-> get_full_text() 获取全文范围\n"
             "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
-            "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
+            "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
+            "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
+            "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
         )
     task_block += requirement_note + "\n"
     if prev_step_feedback and all_ranges:
@@ -919,6 +1018,9 @@ def _build_prompt_execute(
         )
         task_block += query_note + "\n"
     task_block += (
+        "3. **参考案例**：必须仔细阅读 SKILL.md 中的「典型案例库」，案例展示了常见需求的正确 action 组合方式，对你的决策有帮助。\n"
+    )
+    task_block += (
         "\n## 输出要求\n"
         "只返回 JSON 数组，不要其他文字：\n"
         "[\n"
@@ -929,6 +1031,7 @@ def _build_prompt_execute(
         task_block += "WARNING: 不要在 params 里写 rng，系统会自动填充。\n"
     return (
         "你是一个专业的 Word 文档格式化助手，正在使用技能「" + skill_name + "」。\n"
+        + doc_stats_section
         + format_section
         + (hint_section if hint_section else "")
         + pe

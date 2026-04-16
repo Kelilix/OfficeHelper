@@ -104,47 +104,74 @@ class SectionOperator:
         """
         删除指定节前面的分节符，或删除所有分节符（index=0）。
 
+        核心逻辑：
+        - Word 中，段落文本末尾存储顺序为：内容 + chr(12)(分节符) + chr(13)(段落标记)
+        - 分节符 chr(12) 紧邻段落末尾 chr(13) 之前
+        - 操作：展开到整段落末尾 → 向左收缩 1（Word 跳过 chr(13)）→ 落点恰好是 chr(12)
+        - 删除 chr(12) 即可只移除分节符，保留 chr(13) 和段落内容不变
+        - 从后往前遍历段落，避免删除后索引偏移导致漏删或越界
+
         注意：
-        - 不能删除文档的第一个节（它前面没有分节符）
-        - 删除后，该节的页面设置随之丢失，内容并入前一节
+        - 第一个节前面没有分节符，不可删除
+        - 删除分节符不影响节的内容，只是把两个节的页面格式合并到前一节
 
         Args:
-            index: 节编号（1-based），或 0（删除所有分节符，从后往前删）
+            index: 节编号（1-based），或 0（删除所有分节符）
         """
         total = self.count()
         if index == 0:
-            # 删除所有（从后往前避免索引偏移）
-            for i in range(total, 1, -1):
-                self._delete_single(i)
+            self._delete_all_section_breaks()
             return
         if index < 1 or index > total:
             raise IndexError(f"节索引 {index} 超出范围（1~{total}）")
         if index == 1:
             raise ValueError("无法删除文档首节前的分节符（首节前不存在分节符）")
-        self._delete_single(index)
+        self._delete_section_break_before(index)
 
-    def _delete_single(self, index: int):
-        """内部方法：删除指定节前面的分节符，不做边界检查。"""
-        sec = self.get(index)
-        start = sec.Range.Start - 1
-        if start < 0:
+    def _delete_section_break_before(self, section_index: int):
+        """
+        删除第 section_index 节前面的分节符（section_index >= 2）。
+
+        定位方式：section_index 节的 Range.Start 紧邻在分节符 chr(12) 之后。
+        因此向前取 target_start - 1 的位置，就是分节符 chr(12) 所在的位置。
+        """
+        if section_index < 2:
             return
-        # 向前扩展一个段落，确保覆盖分节符字符（chr(12) / chr(13)）
-        rng = self._wb.document.Range(start, sec.Range.Start)
-        rng.Expand(Unit=4)  # wdParagraph = 4
-        # 用 Find 查找 chr(12)（分节符内部存储），替换为空即删除
-        rng.Find.ClearFormatting()
-        # 用 Find 查找 chr(12)（分节符内部存储），Execute 返回 True 表示找到并替换了
-        rng.Find.Text = "\x0c"          # chr(12) = Word 内部的分节符字符
-        rng.Find.MatchCase = True
-        rng.Find.Forward = False
-        rng.Find.Wrap = 0
-        if rng.Find.Execute(Replace=2):  # wdReplaceOne，替换为空即删除
+
+        secs = self._sections()
+        # section_index 节范围起点 = 紧邻分节符之后的位置
+        target_start = secs(section_index).Range.Start
+        if target_start < 2:
             return
-        # 回退：直接删除 chr(13)（段落末尾的分节符标记）
-        rng2 = self._wb.document.Range(start, start + 1)
-        if rng2.Text and ord(rng2.Text) <= 31:
-            rng2.Delete()
+
+        doc = self._wb.document
+        # target_start - 1 就是分节符 chr(12) 所在的位置
+        chr_12_pos = target_start - 1
+        rng = doc.Range(chr_12_pos, chr_12_pos + 1)
+        if rng.Text and ord(rng.Text) == 12:
+            rng.Delete()
+
+    def _delete_all_section_breaks(self):
+        """
+        删除文档中所有的分节符。
+
+        遍历所有节（从后往前），对每个节（index >= 2）：
+        - 该节的 Range.Start 紧跟在分节符 chr(12) 之后
+        - 向左取 1 个字符，若为 chr(12) 则删除
+        从后往前遍历可避免索引偏移导致的漏删或越界。
+        """
+        doc = self._wb.document
+        secs = self._sections()
+        total = secs.Count
+
+        for i in range(total, 1, -1):
+            target_start = secs(i).Range.Start
+            if target_start < 2:
+                continue
+            chr_12_pos = target_start - 1
+            rng = doc.Range(chr_12_pos, chr_12_pos + 1)
+            if rng.Text and ord(rng.Text) == 12:
+                rng.Delete()
 
     def get_current_section_index(self) -> int:
         """
@@ -467,10 +494,9 @@ class SectionOperator:
             Type=33,  # wdFieldPage
         )
         # 追加页数
-        ftr_range.InsertAfter(" / ")
         rng2 = sec.Footers(ftr_idx).Range.Duplicate
         rng2.Collapse(Direction=1)
-        rng2.InsertAfter("")
+        rng2.InsertAfter(" / ")
         ftr_range2 = sec.Footers(ftr_idx).Range.Duplicate
         rng_end = ftr_range2.End - 1
         from_range = self._wb.document.Range(rng_end, rng_end)

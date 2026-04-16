@@ -19,3 +19,6 @@ word-addin/wordassistant/node_modules/
 
 # webpack 构建产物（由 npm run build 生成，随 launcher 一起分发）
 word-addin/wordassistant/dist/
+
+
+/.idea

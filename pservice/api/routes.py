@@ -546,15 +546,17 @@ def _build_prompt_plan_select(
 
 **重要规则**：
 - 每个 step 只能选一个技能
-- 不同选区的操作必须拆为不同 step（如"第1段"和"选中部分"是不同选区，“第1行”和“选中”部分是不同选区）
-- **在仅涉及一个选区的情况下，纯修改类需求（缩进、行距、字体等）必须控制为1步，绝不能拆成多个 step**（例如：同时改缩进和行距 → 1步；设字体和字号 → 1步；改对齐和首行缩进 → 1步）
-- 先查后改的需求（find 后修改）→ 2 步（第一步 need_feedback=true）
+- 每个 step 必须由查询action和操作action组成，查询action在前，用于确认选区，操作action在后，用于操作选区
+- 每个 step 可以操作一个选区，不同选区的操作必须拆为不同 step（如"第1段"和"选中部分"是不同选区，“第1行”和“选中”部分是不同选区）
+- 每个 step 中，一个选区对应的操作action可以有多个，并且都会应用于这个选区，不允许拆分成多个step处理（例如：修改第一段的行距和缩进 → 1步；设字体和字号 → 1步；改对齐和首行缩进 → 1步）
+- 每个 step 只能处理一个选区，这个意思是该选区具备完全相同的操作逻辑，是逻辑上的一个，而非只能有一个，这种场景不允许拆分多个step，例如：查询所有的‘重点’设置红色加粗，字符可能找到多个，但操作统一为红色加粗，因此认为是一个选区，仍在一步内完成
+- 整体操作的step应该优先于局部此操作的step，例如：找到所有的‘重点’设置为宋体红色加粗，其他全部字体设置为宋体，尽管‘重点’的操作在前，但它是局部，仍然应该划分两个step，先处理全部字体，再处理‘重点’
 
 **违反规则的典型错误示例**：
-- ❌ 用户说"把选中文字的首行缩进改成2字符" → 错误拆成"获取段落"+"设置缩进"两个 step
+- ❌ 用户说"查找所有的‘重点’并设置为红色加粗" → 错误拆成"查"+"改"两个 step（应在一个 step 内完成）
 - ❌ 用户说"调大行距" → 错误拆成"查格式"+"改行距"两个 step
 - ❌ 用户说"把字体设成黑体，字号设成三号" → 错误拆成两个 step
-- ✅ 正确：所有纯修改类操作在同一 step 内一次性完成
+- ✅ 正确：同一选区内的所有操作（查询+修改）在一个 step 内一次性完成
 
 ## 输出格式
 
@@ -568,7 +570,7 @@ def _build_prompt_plan_select(
 ```
 
 **selection_hint**：用简短的自然语言描述该 step 的操作对象（如"第1段"、"全文"、"选中部分"）。
-**need_feedback**：仅在"先查后改"场景设为 true，其余均为 false。
+**need_feedback**：由于同一选区内的查询与操作已在同一 step 内完成，**始终设为 false**。
 
 只返回 JSON。"""
 
@@ -843,39 +845,34 @@ def _build_prompt_execute(
         if prev_step_feedback and all_ranges:
             count = len(all_ranges)
             requirement_line = (
-                "**强制要求**：如果已有上一步 feedback，上方选区列表中共有 %d 个选区需要处理。\n"
-                "本 step 只需返回操作类 action（如 set_bold、set_font_color、replace 等），\n"
-                "**禁止**返回任何选区查询类 action（find_all、get_selection_info、get_paragraph_range 等）。\n"
-                "系统会将操作类 action 按每个选区自动展开执行（共 %d 条），无需 LLM 生成循环。\n"
+                "**强制要求**：上方选区列表中共有 %d 个选区需要处理。\n"
+                "本轮只需返回操作类 action，系统自动按每个选区展开执行（共 %d 条），禁止返回查询类 action。\n"
                 "rng 参数使用上方选区列表中的具体 start/end 值，格式示例：\n"
                 '  {"action": "set_bold", "params": {"rng": [%d, %d], "bold": true}, "description": "设置加粗"}\n'
             ) % (count, count, all_ranges[0]["start"], all_ranges[0]["end"])
         elif prev_step_feedback:
             requirement_line = (
                 "**强制要求**：\n"
-                "  - 选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）**只属于当前 step 内**的后续 action，\n"
-                "    **不可跨 step 使用**。其他 step 的选区结果与本 step 无关。\n"
-                "  - 本 step 仍需先查询选区，然后再执行操作：\n"
+                "  - **选区约束**：每个 step 中所有操作必须作用在同一个选区上。\n"
+                "  - 选区查询规则：\n"
                 '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
                 '    · 操作「选中部分」-> get_selection_info()\n'
-                '    · 操作「全文」-> get_full_text() 获取全文范围\n'
-                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
-                "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
-                "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
-                "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
+                '    · 操作「全文」-> get_full_text()\n'
+                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 后自行换算\n'
+                "    · 操作「页面设置类」按全文处理，不需要查范围。\n"
+                "  - 后续操作类 action 的 rng 不要填写，系统会自动用本轮查询结果填充。"
             )
         else:
             requirement_line = (
                 "**强制要求**：\n"
-                "  - 若当前 step 是纯查询类 action（find_all、get_xxx 等），则只需返回该查询 action，不要混入操作类 action。\n"
-                "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
+                "  - **选区约束**：每个 step 中所有操作必须作用在同一个选区上。\n"
+                "  - 选区查询规则：\n"
                 '    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n'
                 '    · 操作「选中部分」-> get_selection_info()\n'
-                '    · 操作「全文」-> get_full_text() 获取全文范围\n'
-                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n'
-                "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
-                "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
-                "  - 后续格式类 action（set_font_name 等）的 rng 不要填写，系统会自动填充。"
+                '    · 操作「全文」-> get_full_text()\n'
+                '    · 操作「前X个字符」-> get_paragraph_range(index=1) 后自行换算\n'
+                "    · 操作「页面设置类」按全文处理，不需要查范围。\n"
+                "  - 后续操作类 action 的 rng 不要填写，系统会自动用本轮查询结果填充。"
             )
         hint_section = (
             feedback_section
@@ -909,22 +906,19 @@ def _build_prompt_execute(
     if prev_step_feedback and all_ranges:
         count = len(all_ranges)
         task_step2_line = (
-            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
-            "3. 如果已有上一步 feedback，上方选区列表中共有 %d 个选区需要处理。\n"
+            "2. 上方选区列表中共有 %d 个选区需要处理。\n"
             "   必须只返回操作类 action，系统自动按每个选区展开执行（共 %d 条），禁止返回查询类 action。\n"
-            "4. 所有 action 的 rng 参数使用选区列表中的具体 start/end 值，不要留空。"
-        ) % (step_num, total_steps, count, count)
+            "3. 所有 action 的 rng 参数使用选区列表中的具体 start/end 值，不要留空。"
+        ) % (count, count)
         rng_example = (
             '  {"action": "set_bold", "params": {"rng": [%d, %d], "bold": true}, "description": "设置加粗"},'
             "\n  ..."
         ) % (all_ranges[0]["start"], all_ranges[0]["end"])
     elif prev_step_feedback:
         task_step2_line = (
-            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
-            "3. 注意：选区查询结果（如 get_paragraph_range、get_selection_info）**只属于当前 step**。\n"
-            "   其他 step 的选区结果与本 step 无关，本 step 必须自行查询（除非操作全文）。\n"
-            "4. 后续格式类 action 的 rng 不要填写，系统会自动用本 step 的查询结果填充。"
-        ) % (step_num, total_steps)
+            "2. 根据用户需求，**先查询选区（若尚未查询），再执行操作**\n"
+            "3. 后续操作类 action 的 rng 不要填写，系统会自动填充。"
+        )
         rng_example = (
             '  {"action": "get_paragraph_range", "params": {"index": 1}, "description": "获取第1段范围"}\n'
             '  {"action": "set_font_name", "params": {"font_name": "黑体"}, "description": "设为黑体"}\n'
@@ -933,9 +927,9 @@ def _build_prompt_execute(
     else:
         # 首次规划，无上一步 → 必须先查询再操作，示例包含完整的「查询→操作」链
         task_step2_line = (
-            "2. 你只需要规划当前 step（第 %d/%d 步）的 action，不要规划其他 step 的内容。\n"
-            "3. 第一步必须调用选区查询 action（get_xxx），后续 action 的 rng 不要填写，系统会自动填充。"
-        ) % (step_num, total_steps)
+            "2. 根据用户需求，**先查询选区（若尚未查询），再执行操作**\n"
+            "3. 后续操作类 action 的 rng 不要填写，系统会自动填充。"
+        )
         rng_example = (
             '  {"action": "get_full_text", "params": {}, "description": "获取全文范围"}\n'
             '  {"action": "set_font_name", "params": {"font_name": "宋体"}, "description": "设为宋体"}\n'
@@ -961,64 +955,50 @@ def _build_prompt_execute(
         ) % (count, all_ranges[0]["start"], all_ranges[0]["end"])
     elif prev_step_feedback:
         requirement_note = (
-            "  - **重要**：选区查询结果（如 get_paragraph_range、get_selection_info 的返回值）\n"
-            "    **只属于当前 step 内**的后续 action，**不可跨 step 使用**。\n"
-            "    其他 step（如 step1）的选区结果与本 step 无关，本 step 必须自行查询。\n"
-            "  - 第一步必须调用选区查询 action：\n"
+            "  - 选区查询规则：\n"
             "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
             "    · 操作「选中部分」-> get_selection_info()\n"
-            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
-            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
-            "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
+            "    · 操作「全文」-> get_full_text()\n"
+            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 后自行换算\n"
+            "    · 操作「页面设置类」（set_paper_size_preset、set_orientation、set_page_margin 等）\n"
+            "      按全文处理，不需要查范围，直接调用即可。\n"
+            "  - 后续操作类 action 的 rng 不要填写，系统会自动用本轮查询结果填充。"
         )
     else:
         requirement_note = (
-            "  - 若当前 step 是纯查询类 action（find_all、get_xxx 等），则只需返回该查询 action，\n"
-            "    不要混入操作类 action。\n"
-            "  - 若当前 step 不是纯查询类 action，则第一步必须调用选区查询 action：\n"
+            "  - 选区查询规则：\n"
             "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
             "    · 操作「选中部分」-> get_selection_info()\n"
-            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
-            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
-            "  · 操作「页面设置类」（如 set_paper_size_preset、set_paper_size、\n"
-            "    set_orientation、set_page_margin 等）按全文处理，不需要查范围，直接调用即可。\n"
-            "  - 后续格式类 action 的 rng 不要填写，系统会自动用本 step 查询结果填充。"
+            "    · 操作「全文」-> get_full_text()\n"
+            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 后自行换算\n"
+            "    · 操作「页面设置类」（set_paper_size_preset、set_orientation、set_page_margin 等）\n"
+            "      按全文处理，不需要查范围，直接调用即可。\n"
+            "  - 后续操作类 action 的 rng 不要填写，系统会自动用本轮查询结果填充。"
         )
     task_block += requirement_note + "\n"
-    if prev_step_feedback and all_ranges:
-        query_note = (
-            "2. **step 类型限制**：\n"
-            "  - **只允许**返回操作类 action（set_bold、set_font_color、replace 等）。\n"
-            "  - **禁止**返回任何查询类 action（find_all、get_selection_info、get_paragraph_range、\n"
-            "    get_full_text、find、count_occurrences 等），系统已在上一步完成查询。\n"
-        )
-        task_block += query_note + "\n"
-    elif not prev_step_feedback:
-        query_note = (
-            "2. **step 类型限制**：\n"
-            "  - 查询类型 step（用于获取文档信息，如 find_all、get_selection_info 等）\n"
-            "    **只能规划纯查询类 action，不得混入 set/delete/insert 等操作类 action**。\n"
-            "  - 操作类型 step（用于修改格式或内容）\n"
-            "    **只能规划操作类 action，不得混入查询类 action**。\n"
-            "\n"
-            "  **注意**：若需求为「先查后改」，必须拆为两个独立 step（查 → 操作），\n"
-            "切勿在单个 step 中混合查询与操作类 action。"
-        )
-        task_block += query_note + "\n"
-    else:
-        # prev_step_feedback 且无 all_ranges：跨 step 选区结果不可复用，本 step 必须自行查询
-        query_note = (
-            "2. **step 类型限制**：\n"
-            "  - **必须**在当前 step 内添加选区查询 action：\n"
-            "    · 操作「第N段」-> get_paragraph_range(index=N) （1-based）\n"
-            "    · 操作「选中部分」-> get_selection_info()\n"
-            "    · 操作「全文」-> get_full_text() 获取全文范围\n"
-            "    · 操作「前X个字符」-> get_paragraph_range(index=1) 获取首段范围后自行换算\n"
-            "    选区查询结果只属于当前 step，**不可**使用其他 step 的选区结果。\n"
-        )
-        task_block += query_note + "\n"
+    # 方案B：统一约束——每个 step 的所有操作作用在同一选区上
+    constraint_note = (
+        "2. **选区约束（核心规则）**：\n"
+        "  - 每个 step 中，**所有操作必须作用在同一个选区上**。\n"
+        "    查询类 action 获取的选区（get_xxx、find_xxx 等），\n"
+        "    后续所有 set_xxx 操作都作用在这个选区上。\n"
+        "  - 示例：\n"
+        "    · 「第一段的小字加粗红色」= 一个查询（get_paragraph_range）+ 两个操作（set_bold、set_font_color）→ 1 step\n"
+        "    · 「第一段的小字加粗红色 + 第二段的小字加粗蓝色」= 两个不同选区 → 2 个 step\n"
+        "    · 「全文的小字加粗红色」= find_all 返回多个位置，所有操作展开到每个位置 → 1 step\n"
+        "\n"
+        "3. **查询 → 操作顺序**：\n"
+        "  - 先调用查询类 action 获取选区（get_xxx、find_xxx 等），\n"
+        "    再调用操作类 action（set_xxx、replace_xxx 等）。\n"
+        "  - 页面设置类 action（set_paper_size_preset、set_orientation、set_page_margin 等）\n"
+        "    按全文处理，不需要查范围，直接调用即可。\n"
+        "\n"
+        "4. **rng 参数**：\n"
+        "  - 操作类 action 的 rng 不要填写，系统会自动用本轮的查询结果填充。\n"
+    )
+    task_block += constraint_note + "\n"
     task_block += (
-        "3. **参考案例**：必须仔细阅读 SKILL.md 中的「典型案例库」，案例展示了常见需求的正确 action 组合方式，对你的决策有帮助。\n"
+        "5. **参考案例**：必须仔细阅读 SKILL.md 中的「典型案例库」，案例展示了常见需求的正确 action 组合方式，对你的决策有帮助。\n"
     )
     task_block += (
         "\n## 输出要求\n"

@@ -29,12 +29,17 @@
         or to a Microsoft 365 account.
     </div>
     <script>
-        if ((navigator.userAgent.indexOf("Trident") !== -1) || (navigator.userAgent.indexOf("Edge") !== -1)) {
-            var tridentMessage = document.getElementById("tridentmessage");
-            var normalContainer = document.getElementById("container");
-            tridentMessage.style.display = "block";
-            normalContainer.style.display = "none";
-        } 
+        /* 仅屏蔽 IE(Trident) 与旧版 EdgeHTML(Edge/xx)；勿用 indexOf("Edge")，Chromium WebView2 的 UA 含 Edg/ 易被误判 */
+        (function () {
+            var ua = navigator.userAgent;
+            var legacy = ua.indexOf("Trident") !== -1 || /Edge\/\d/i.test(ua);
+            if (legacy) {
+                var tridentMessage = document.getElementById("tridentmessage");
+                var normalContainer = document.getElementById("container");
+                tridentMessage.style.display = "block";
+                normalContainer.style.display = "none";
+            }
+        })();
     </script>
 </body>
 

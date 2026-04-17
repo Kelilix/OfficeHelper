@@ -3,7 +3,9 @@
  * 与 pservice FastAPI 后端通信
  */
 
-const API_BASE = "/api";
+const _origin = process.env.ADDIN_API_ORIGIN ?? "";
+const API_BASE =
+  _origin.length > 0 ? `${_origin.replace(/\/$/, "")}/api` : "/api";
 
 // ── 类型定义 ─────────────────────────────────────────────────────
 

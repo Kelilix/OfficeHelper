@@ -11,6 +11,9 @@
   <SupportUrl DefaultValue="https://www.contoso.com/help"/>
   <AppDomains>
     <AppDomain>https://www.contoso.com</AppDomain>
+    <!-- 与 webpack-dev-server 一致：开发模式为 HTTPS；launcher 运行时会改写为 http://127.0.0.1:3000 -->
+    <AppDomain>https://localhost</AppDomain>
+    <AppDomain>http://localhost</AppDomain>
   </AppDomains>
   <Hosts>
     <Host Name="Document"/>

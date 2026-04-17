@@ -42,7 +42,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 节基础访问
 
-#### 1. get_section_count
+#### 1. get_section_count **[查询]**
+
 
 返回文档中的节总数。
 
@@ -50,7 +51,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_section_count", "params": {}, "description": "获取节总数"}
 ```
 
-#### 2. get_section_by_index
+#### 2. get_section_by_index **[查询]**
+
 
 按索引获取节。`index` 从 1 开始，支持负数（-1 = 最后一节）。
 
@@ -59,7 +61,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_section_by_index", "params": {"index": -1}, "description": "获取最后一节"}
 ```
 
-#### 3. get_current_section_index
+#### 3. get_current_section_index **[查询]**
+
 
 获取当前 Selection（光标）所在节的索引。
 
@@ -71,7 +74,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 页面设置读取
 
-#### 4. get_page_setup_info
+#### 4. get_page_setup_info **[查询]**
+
 
 读取指定节的完整页面设置信息（页边距、纸张、方向、分栏等）。
 
@@ -79,7 +83,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_page_setup_info", "params": {"index": 1}, "description": "读取页面设置"}
 ```
 
-#### 5. get_page_margins
+#### 5. get_page_margins **[查询]**
+
 
 读取页边距值（厘米）。
 
@@ -87,7 +92,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_page_margins", "params": {"index": 1}, "description": "读取页边距"}
 ```
 
-#### 6. get_paper_size
+#### 6. get_paper_size **[查询]**
+
 
 读取纸张大小（宽高，厘米）。
 
@@ -95,7 +101,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_paper_size", "params": {"index": 1}, "description": "读取纸张大小"}
 ```
 
-#### 7. get_orientation
+#### 7. get_orientation **[查询]**
+
 
 读取纸张方向：`"portrait"`（纵向）或 `"landscape"`（横向）。
 
@@ -103,7 +110,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_orientation", "params": {"index": 1}, "description": "读取纸张方向"}
 ```
 
-#### 8. get_column_count
+#### 8. get_column_count **[查询]**
+
 
 读取分栏数。
 
@@ -111,7 +119,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_column_count", "params": {"index": 1}, "description": "读取分栏数"}
 ```
 
-#### 9. get_column_info
+#### 9. get_column_info **[查询]**
+
 
 读取指定节的分栏详细信息（栏数、栏宽、栏间距、是否等宽栏）。
 
@@ -119,7 +128,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_column_info", "params": {"index": 1}, "description": "读取分栏详情"}
 ```
 
-#### 10. get_section_start_type
+#### 10. get_section_start_type **[查询]**
+
 
 读取节的起始类型：`"continuous"` `"new_page"` `"even_page"` `"odd_page"`。
 
@@ -131,7 +141,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 页边距设置
 
-#### 11. set_page_margins
+#### 11. set_page_margins **[操作]**
+
 
 设置页边距。参数为厘米值，可传部分参数（其他保持不变）。
 
@@ -142,7 +153,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_page_margins", "params": {"index": 1, "top": 3.0}, "description": "设置上边距"}
 ```
 
-#### 12. set_page_margins_by_inch
+#### 12. set_page_margins_by_inch **[操作]**
+
 
 用英寸设置页边距（方便习惯英制单位的场景）。
 
@@ -150,7 +162,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_page_margins_by_inch", "params": {"index": 1, "top": 1.0, "bottom": 1.0, "left": 1.25, "right": 1.25}, "description": "英寸设置页边距"}
 ```
 
-#### 13. set_page_margins_preset
+#### 13. set_page_margins_preset **[操作]**
+
 
 使用预设方案设置页边距。
 
@@ -171,7 +184,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 纸张设置
 
-#### 14. set_paper_size
+#### 14. set_paper_size **[操作]**
+
 
 设置纸张大小。参数为宽高（厘米）。
 
@@ -180,7 +194,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_paper_size", "params": {"index": 1, "width": 8.5, "height": 11}, "description": "设为Letter"}
 ```
 
-#### 15. set_paper_size_preset
+#### 15. set_paper_size_preset **[操作]**
+
 
 使用预设纸张类型。
 
@@ -193,7 +208,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 常用预设：`A0` `A1` `A2` `A3` `A4` `A5` `B4` `B5` `Letter` `Legal` `Tabloid` `Executive`
 
-#### 16. set_orientation
+#### 16. set_orientation **[操作]**
+
 
 设置纸张方向。
 
@@ -206,7 +222,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 分栏操作
 
-#### 17. set_columns
+#### 17. set_columns **[操作]**
+
 
 设置分栏数。
 
@@ -215,7 +232,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_columns", "params": {"index": 1, "count": 3, "equal_width": true}, "description": "三栏等宽"}
 ```
 
-#### 18. set_columns_with_gutter
+#### 18. set_columns_with_gutter **[操作]**
+
 
 设置分栏数并指定栏间距（厘米）。
 
@@ -223,7 +241,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_columns_with_gutter", "params": {"index": 1, "count": 2, "spacing": 0.75}, "description": "两栏间距0.75cm"}
 ```
 
-#### 19. set_columns_equal_width
+#### 19. set_columns_equal_width **[操作]**
+
 
 将分栏设为等宽栏。
 
@@ -231,7 +250,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_columns_equal_width", "params": {"index": 1}, "description": "设为等宽栏"}
 ```
 
-#### 20. set_column_width
+#### 20. set_column_width **[操作]**
+
 
 设置指定栏的宽度（厘米）。`column` 从 1 开始，`width` 为栏宽。
 
@@ -239,7 +259,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_column_width", "params": {"index": 1, "column": 1, "width": 8.0}, "description": "设置第1栏宽度"}
 ```
 
-#### 21. apply_two_column_layout
+#### 21. apply_two_column_layout **[操作]**
+
 
 应用两栏布局（带分隔线）。
 
@@ -252,7 +273,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 分节符与节操作
 
-#### 22. insert_section_break
+#### 22. insert_section_break **[操作]**
+
 
 在当前 Selection 处插入分节符。`type`：`"continuous"` `"new_page"` `"even_page"` `"odd_page"`
 
@@ -261,7 +283,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "insert_section_break", "params": {"type": "continuous"}, "description": "插入分节符（连续）"}
 ```
 
-#### 23. set_section_start_type
+#### 23. set_section_start_type **[操作]**
+
 
 设置指定节的起始类型。
 
@@ -269,7 +292,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_section_start_type", "params": {"index": 1, "type": "new_page"}, "description": "节起始于新页"}
 ```
 
-#### 24. set_section_start_new_page
+#### 24. set_section_start_new_page **[操作]**
+
 
 快捷方式：将节设为从新页开始。
 
@@ -277,7 +301,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_section_start_new_page", "params": {"index": 1}, "description": "节从新页开始"}
 ```
 
-#### 25. set_section_start_continuous
+#### 25. set_section_start_continuous **[操作]**
+
 
 快捷方式：将节设为连续（无分页）。
 
@@ -285,7 +310,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_section_start_continuous", "params": {"index": 1}, "description": "连续节"}
 ```
 
-#### 26. set_first_page_different
+#### 26. set_first_page_different **[操作]**
+
 
 设置首页不同（首页使用不同的页眉页脚）。
 
@@ -294,7 +320,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_first_page_different", "params": {"index": 1, "on": false}, "description": "取消首页不同"}
 ```
 
-#### 27. set_odd_and_even_pages
+#### 27. set_odd_and_even_pages **[操作]**
+
 
 设置奇偶页不同（奇偶页使用不同的页眉页脚）。
 
@@ -307,7 +334,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 分页控制
 
-#### 28. insert_page_break
+#### 28. insert_page_break **[操作]**
+
 
 在 Range 处插入手动分页符（硬分页符）。
 
@@ -315,7 +343,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "insert_page_break", "params": {"rng": "[100, 100]"}, "description": "插入分页符"}
 ```
 
-#### 29. insert_line_break
+#### 29. insert_line_break **[操作]**
+
 
 在 Range 处插入换行符（软分页符，跨行不断行）。
 
@@ -323,7 +352,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "insert_line_break", "params": {"rng": "[50, 50]"}, "description": "插入换行符"}
 ```
 
-#### 30. insert_column_break
+#### 30. insert_column_break **[操作]**
+
 
 在多栏文档中插入栏分隔符（跳到下一栏）。
 
@@ -331,7 +361,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "insert_column_break", "params": {"rng": "[50, 50]"}, "description": "插入栏分隔符"}
 ```
 
-#### 31. remove_page_break
+#### 31. remove_page_break **[操作]**
+
 
 移除 Range 处的分页符。
 
@@ -339,7 +370,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "remove_page_break", "params": {"rng": "[100, 102]"}, "description": "移除分页符"}
 ```
 
-#### 32. get_page_count
+#### 32. get_page_count **[查询]**
+
 
 获取文档的总页数。
 
@@ -347,7 +379,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_page_count", "params": {}, "description": "获取总页数"}
 ```
 
-#### 33. get_page_of_range
+#### 33. get_page_of_range **[查询]**
+
 
 获取指定 Range 所在页的页码。
 
@@ -359,7 +392,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 页眉页脚操作
 
-#### 34. set_header
+#### 34. set_header **[操作]**
+
 
 设置页眉内容。`position`：`"primary"` `"first"` `"even_odd"`；`alignment`：`"left"` `"center"` `"right"`
 
@@ -369,7 +403,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_header", "params": {"index": 1, "position": "even_odd", "text": "偶数页页眉"}, "description": "设置偶数页眉"}
 ```
 
-#### 35. get_header
+#### 35. get_header **[查询]**
+
 
 读取页眉内容。
 
@@ -377,7 +412,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_header", "params": {"index": 1, "position": "primary"}, "description": "读取页眉"}
 ```
 
-#### 36. clear_header
+#### 36. clear_header **[查询]**
+
 
 清除页眉内容。
 
@@ -385,7 +421,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "clear_header", "params": {"index": 1, "position": "primary"}, "description": "清除页眉"}
 ```
 
-#### 37. set_footer
+#### 37. set_footer **[操作]**
+
 
 设置页脚内容。
 
@@ -393,7 +430,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_footer", "params": {"index": 1, "position": "primary", "text": "第 {PAGE} 页"}, "description": "设置页脚"}
 ```
 
-#### 38. get_footer
+#### 38. get_footer **[查询]**
+
 
 读取页脚内容。
 
@@ -401,7 +439,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "get_footer", "params": {"index": 1, "position": "primary"}, "description": "读取页脚"}
 ```
 
-#### 39. clear_footer
+#### 39. clear_footer **[查询]**
+
 
 清除页脚内容。
 
@@ -409,7 +448,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "clear_footer", "params": {"index": 1, "position": "primary"}, "description": "清除页脚"}
 ```
 
-#### 40. insert_page_number_in_header
+#### 40. insert_page_number_in_header **[查询]**
+
 
 在页眉中插入页码字段。
 
@@ -417,7 +457,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "insert_page_number_in_header", "params": {"index": 1, "position": "primary", "alignment": "right"}, "description": "页眉右侧插入页码"}
 ```
 
-#### 41. insert_page_number_in_footer
+#### 41. insert_page_number_in_footer **[查询]**
+
 
 在页脚中插入页码字段。
 
@@ -429,7 +470,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 页面级格式设置
 
-#### 42. set_vertical_alignment
+#### 42. set_vertical_alignment **[操作]**
+
 
 设置页面内容的垂直对齐方式。`align`：`"top"` `"center"` `"justify"` `"bottom"`
 
@@ -437,7 +479,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_vertical_alignment", "params": {"index": 1, "align": "center"}, "description": "内容垂直居中"}
 ```
 
-#### 43. set_page_border
+#### 43. set_page_border **[操作]**
+
 
 设置页面边框（整页四周的边框）。
 
@@ -445,7 +488,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_page_border", "params": {"index": 1, "side": "all", "line_style": 1, "line_width": 6, "color": "black"}, "description": "设置页面边框"}
 ```
 
-#### 44. clear_page_border
+#### 44. clear_page_border **[操作]**
+
 
 清除页面边框。
 
@@ -453,7 +497,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "clear_page_border", "params": {"index": 1}, "description": "清除页面边框"}
 ```
 
-#### 45. set_page_shading
+#### 45. set_page_shading **[操作]**
+
 
 设置整页背景填充色。
 
@@ -461,7 +506,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "set_page_shading", "params": {"index": 1, "fill_color": "lightBlue"}, "description": "设置页面背景色"}
 ```
 
-#### 46. clear_page_shading
+#### 46. clear_page_shading **[操作]**
+
 
 清除页面背景色。
 
@@ -473,7 +519,8 @@ Word 文档的页面设置通过两个核心对象完成：
 
 ### 文档级操作
 
-#### 47. apply_page_setup_to_all
+#### 47. apply_page_setup_to_all **[操作]**
+
 
 将当前节的页面设置应用到所有节。
 
@@ -481,7 +528,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "apply_page_setup_to_all", "params": {"index": 1}, "description": "应用设置到全文"}
 ```
 
-#### 48. copy_page_setup
+#### 48. copy_page_setup **[操作]**
+
 
 将源节的页面设置复制到目标节。
 
@@ -489,7 +537,8 @@ Word 文档的页面设置通过两个核心对象完成：
 {"action": "copy_page_setup", "params": {"from_index": 1, "to_index": 2}, "description": "复制页面设置"}
 ```
 
-#### 49. reset_page_setup
+#### 49. reset_page_setup **[操作]**
+
 
 重置指定节的页面设置为 Word 默认值。
 
@@ -520,6 +569,15 @@ Word 文档的页面设置通过两个核心对象完成：
 ```
 
 如果文档只有单节，可以直接写 `index: 1`。如果文档有多节，请先调用 `get_section_count` 查询节数量，再决定操作哪个节。
+
+## Action 类型分类汇总（快速参考）
+
+| 类型 | 说明 | Action 编号 |
+|------|------|-------------|
+| **查询类** | 直接调用，无需先查范围。所有按索引查询的方法不需要先调用 `get_section_count` | 1-13, 33-41, 48-49 |
+| **操作类** | 写入类，会修改文档页面设置 | 其余编号 |
+
+---
 
 ## 典型案例库
 

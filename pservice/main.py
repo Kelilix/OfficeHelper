@@ -45,12 +45,7 @@ def _preload_skill_modules():
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        # 尝试让 Python 正常导入 scripts 包
-        # 注意：可能被 win32/scripts 抢占，所以有兜底逻辑
-        if "scripts" not in sys.modules:
-            importlib.import_module("scripts")
-
-    # 兜底：确保两个主模块都已注册
+    # 兜底
     if "scripts.word_text_operator" not in sys.modules:
         _load_module_files(
             _project_root / "skills" / "word-text-operator" / "scripts",
@@ -114,9 +109,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from api import app
-from api.routes import router as api_router
-from api.service import word_service, llm_service
+from .api import app
+from .api.routes import router as api_router
+from .api.service import word_service, llm_service
 
 # 注册路由
 app.include_router(api_router)
@@ -139,7 +134,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8765,
         reload=False,
         log_level="info",

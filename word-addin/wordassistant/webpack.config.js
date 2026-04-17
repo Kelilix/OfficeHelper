@@ -93,6 +93,10 @@ module.exports = async (env, options) => {
       new webpack.ProvidePlugin({
         Promise: ["es6-promise", "Promise"],
       }),
+      // 生产包由 launcher 的 http.server 提供，无 devServer 的 /api 代理，须直连后端
+      new webpack.EnvironmentPlugin({
+        ADDIN_API_ORIGIN: dev ? "" : "http://127.0.0.1:8765",
+      }),
     ],
     devServer: {
       hot: true,

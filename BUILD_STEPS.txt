@@ -1,0 +1,105 @@
+# OfficeHelper 构建步骤
+
+> 以下步骤顺序必须严格遵守，否则资源路径会不匹配。
+
+---
+
+## 第 1 步：打包 Python 后端（PyInstaller）
+
+```
+cd D:\soft\0project\test\OfficeHelper
+D:\soft\python3.14\python.exe -m PyInstaller OfficeHelperBackend.spec --clean
+```
+
+产物：`dist\OfficeHelperBackend\OfficeHelperBackend.exe`
+（整个目录包含 exe + `_internal/` + dll）
+
+---
+
+## 第 2 步：构建前端 React 资源（Vite）
+
+```
+cd D:\soft\0project\test\OfficeHelper\front
+D:\soft\nodeJS\npm.cmd run build
+```
+
+产物：`front\dist\index.html` 及静态资源
+
+---
+
+## 第 3 步：打包 Tauri 应用（生成 NSIS/MSI 安装包）
+
+> 必须先设置 Rust 环境变量，否则 Cargo 找不到 MSVC 工具链。
+
+```
+set "CARGO_HOME=C:\Users\gaotianyu.35\.cargo"
+set "RUSTUP_HOME=C:\Users\gaotianyu.35\.cargo"
+set "PATH=%CARGO_HOME%\bin;D:\soft\MSVC\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64;%PATH%"
+
+cd D:\soft\0project\test\OfficeHelper\front
+D:\soft\nodeJS\npm.cmd run tauri build
+```
+
+---
+
+## 预期产物目录结构
+
+```
+D:\soft\0project\test\OfficeHelper\
+│
+├── dist/                              # ── Step 1 产物
+│   └── OfficeHelperBackend/
+│       ├── OfficeHelperBackend.exe   # Python 后端主程序
+│       ├── python314.dll
+│       ├── python3.dll
+│       ├── vcruntime140.dll
+│       ├── vcruntime140_1.dll
+│       └── _internal/                # Python 运行时及依赖
+│           ├── base_library.zip
+│           ├── core/                  # Python core 模块
+│           ├── skills/                 # AI skills 模块
+│           ├── config.json
+│           └── *.pyd / *.dll
+│
+├── front/
+│   ├── dist/                          # ── Step 2 产物
+│   │   ├── index.html
+│   │   └── assets/
+│   │
+│   └── src-tauri/
+│       └── target/release/
+│           ├── office-helper-front.exe  # Tauri 主程序（Rust）
+│           ├── OfficeHelperBackend/      # Tauri bundle 资源副本
+│           │   ├── OfficeHelperBackend.exe
+│           │   ├── python314.dll
+│           │   ├── python3.dll
+│           │   ├── vcruntime140.dll
+│           │   ├── vcruntime140_1.dll
+│           │   └── _internal/
+│           │       ├── base_library.zip
+│           │       ├── core/
+│           │       ├── skills/
+│           │       └── *.pyd
+│           │
+│           └── bundle/                  # ── Step 3 产物（安装包）
+│               ├── nsis/
+│               │   └── OfficeHelper_1.0.0_x64-setup.exe
+│               └── msi/
+│                   └── OfficeHelper_1.0.0_x64_en-US.msi
+```
+
+---
+
+## 关键说明
+
+1. **Tauri bundle 如何工作**：Step 3 执行时，Tauri 会：
+   - 编译 Rust 代码生成 `office-helper-front.exe`
+   - 读取 `tauri.conf.json` 中 `bundle.resources` 配置（`"../../dist/OfficeHelperBackend/*"`）
+   - 将 `dist/OfficeHelperBackend/` 下所有内容复制到 `target/release/OfficeHelperBackend/`
+   - 用 NSIS/MSI 将 exe + resources 打包成安装程序
+
+2. **Rust 运行时如何找后端**：运行打包后的 exe 时（无论是从 `target/release/` 还是安装后到 `Program Files`），后端程序位于同目录下的 `OfficeHelperBackend/OfficeHelperBackend.exe`，这是正确路径。
+
+3. **如果运行 `office-helper-front.exe` 仍然报后端找不到**：说明 Step 3 未完成或失败。检查 `front/src-tauri/target/release/` 下是否存在 `OfficeHelperBackend/` 子目录。
+
+4. **安装包分发**：将 `bundle/nsis/OfficeHelper_1.0.0_x64-setup.exe` 分发给用户，双击安装后 `OfficeHelper.exe` 和后端资源会自动放在正确位置。

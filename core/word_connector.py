@@ -153,26 +153,52 @@ class WordConnector:
             # 初始化COM
             pythoncom.CoInitialize()
 
-            # 创建Word应用实例
-            self._word_app = win32com.client.Dispatch("Word.Application")
+            # 优先尝试获取已运行的 Word 实例（GetObject），避免创建新窗口
+            # 这样可以复用用户已打开的 Word 文档
+            try:
+                self._word_app = win32com.client.GetObject(Class="Word.Application")
+            except Exception:
+                # 如果没有已运行的 Word 实例，则创建新实例
+                self._word_app = win32com.client.Dispatch("Word.Application")
+                self._word_app.Visible = visible
+                self._word_app.DisplayAlerts = False
+
+            # 确保窗口可见
             self._word_app.Visible = visible
-            self._word_app.DisplayAlerts = False
 
             return True
 
         except Exception as e:
             print(f"连接Word失败: {e}")
+            self._word_app = None
             return False
+
+    def get_document_name(self) -> str:
+        """
+        获取当前活动文档的名称。
+        即使 _document 为 None（由用户手动打开的文档），也能获取到名称。
+        """
+        if not self._word_app:
+            return ""
+        try:
+            doc = self._word_app.ActiveDocument
+            if doc is not None:
+                name = doc.Name
+                return name if name else ""
+        except Exception:
+            pass
+        return ""
 
     def is_connected(self) -> bool:
         """
         检查是否已连接（通过探测 COM 代理有效性）。
-        注意：本方法只检查状态，不尝试重新连接（重新连接的逻辑在调用方）。
+        注意：本方法只检查 Word 应用对象是否有效，不要求必须有活动文档。
         """
         if self._word_app is None:
             return False
         try:
-            _ = self._word_app.ActiveDocument
+            # 用 Version 属性探测代理有效性，Word 即使没有文档也支持此属性
+            _ = self._word_app.Version
             return True
         except Exception:
             self._word_app = None

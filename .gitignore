@@ -1,24 +1,41 @@
 # ─── Python ─────────────────────────────────────────────────────────────────
-# 字节码缓存（通配写法，不依赖 Python 版本）
-__pycache__/
+# **/ 递归匹配任意层级的 __pycache__（root + pservice/api/ + skills/*/scripts/ 等）
+**/__pycache__/
 *.py[cod]
 *.pyc
+*.pyo
+*.pyd             # PyInstaller 打包的 compiled extensions
+*.egg-info/
+*.egg
 
 # PyInstaller
 build/
 dist/
-*.spec
 
-# 打包 / 启动脚本（由 build_launcher.py / launcher.py 自生成，不应入仓）
-launcher.py
-build_launcher.py
+# ─── Tauri / Frontend ───────────────────────────────────────────────────────
+# Vite 构建产物（React 前端）
+front/dist/
 
-# ─── Node.js ────────────────────────────────────────────────────────────────
-# 前端 add-in 依赖（由 npm install 生成，运行时由 CDN / 开发者环境提供）
-word-addin/wordassistant/node_modules/
+# Tauri 编译产物（Rust target + bundle）
+front/src-tauri/target/
 
-# webpack 构建产物（由 npm run build 生成，随 launcher 一起分发）
-word-addin/wordassistant/dist/
+# ─── Node.js / npm ───────────────────────────────────────────────────────────
+# 依赖由 package-lock.json 管理，node_modules 不入仓
+front/node_modules/
+pservice/node_modules/
 
+# ─── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-/.idea
+# ─── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ─── Temp / Logs ─────────────────────────────────────────────────────────────
+*.log
+build.log
+build_error.log

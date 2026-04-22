@@ -9,7 +9,7 @@ import base64
 import io
 import logging
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
@@ -59,6 +59,12 @@ class TurnRecord:
     action: str = ""     # 解析出的 action JSON 字符串（如 `{"action":"set_font","params":...}`）
     description: str = ""# 操作描述
     executed: Any = ""   # 执行结果 list（如 `[{"action":"set_font_size","before_state":"..."}]`），直接存 list 不转 JSON
+    document_name: str = ""  # 关联的文档名
+    updated_at: str = ""     # ISO 格式时间戳（最近一次更新的时间）
+
+    def __post_init__(self):
+        # 支持旧代码：executed 传 list 时不报错
+        pass
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +74,8 @@ class TurnRecord:
             "action": self.action,
             "描述": self.description,
             "执行结果": json.dumps(self.executed, ensure_ascii=False) if isinstance(self.executed, list) else self.executed,
+            "文档名": self.document_name,
+            "更新时间": self.updated_at,
         }
 
     def to_user_json(self) -> dict:
@@ -83,6 +91,8 @@ class TurnRecord:
             key: self.content,
             "描述": self.description,
             "执行结果": json.dumps(self.executed, ensure_ascii=False) if isinstance(self.executed, list) else self.executed,
+            "文档名": self.document_name,
+            "更新时间": self.updated_at,
         }
 
 
@@ -531,6 +541,47 @@ class LLMService:
             records = self._sessions.get(session_id, [])
             return [r.to_user_json() for r in records]
 
+    def list_sessions(self) -> List[dict]:
+        """
+        返回所有 session 的摘要信息，供前端会话切换下拉框使用。
+        每个 session 返回：session_id、document_name、turn_count、last_message、last_updated。
+        """
+        with self._sessions_lock:
+            result = []
+            for session_id, records in self._sessions.items():
+                if not records:
+                    continue
+                # 找最后一条 user 消息作为 last_message
+                last_msg = ""
+                for r in reversed(records):
+                    if r.role == "user" and r.content:
+                        last_msg = r.content[:60]
+                        break
+                # 找最后更新时间（倒序遍历取第一条有时间的）
+                last_updated = ""
+                for r in reversed(records):
+                    if r.updated_at:
+                        last_updated = r.updated_at
+                        break
+                # 取任意一条记录的 document_name（通常 user/assistant 都有）
+                doc_name = ""
+                for r in records:
+                    if r.document_name:
+                        doc_name = r.document_name
+                        break
+                # 轮次数 = user 消息数量
+                turn_count = sum(1 for r in records if r.role == "user")
+                result.append({
+                    "session_id": session_id,
+                    "document_name": doc_name,
+                    "turn_count": turn_count,
+                    "last_message": last_msg,
+                    "last_updated": last_updated,
+                })
+            # 按更新时间倒序
+            result.sort(key=lambda x: x["last_updated"] or "", reverse=True)
+            return result
+
     def clear_session(self, session_id: str) -> bool:
         """清空指定 session 的对话历史，返回是否真的清掉了。"""
         with self._sessions_lock:
@@ -744,15 +795,20 @@ class LLMService:
             self._log_response(response, tag="chat")
         return response
 
-    def _save_turn(self, session_id: str, role: str, content: str, **kwargs):
+    def _save_turn(self, session_id: str, role: str, content: str, document_name: str = "", **kwargs):
         """
         内部方法：将一轮对话追加到历史（供 chat_with_context 内部调用）。
         不走 add_to_history，避免递归。
         """
+        from datetime import datetime
+        now = datetime.now().isoformat()
         with self._sessions_lock:
             records = self._sessions.get(session_id, [])
             next_turn = (len(records) // 2) + 1
-            records.append(TurnRecord(turn=next_turn, role=role, content=content, **kwargs))
+            records.append(TurnRecord(
+                turn=next_turn, role=role, content=content,
+                document_name=document_name, updated_at=now, **kwargs
+            ))
             trimmed = self._trim_history(records)
             self._sessions[session_id] = trimmed
 
@@ -763,6 +819,7 @@ class LLMService:
         stream: bool = False,
         session_id: str = "default",
         add_to_history: bool = True,
+        document_name: str = "",
     ) -> str:
         """
         带完整上下文 + 多轮对话历史的聊天（供 API 路由使用）。
@@ -810,12 +867,14 @@ class LLMService:
                 # 追加用户轮和助手轮到历史
                 self._save_turn(
                     session_id, "user", user_message,
+                    document_name=document_name,
                 )
                 self._save_turn(
                     session_id, "assistant", response,
                     action=response,
                     description=action_desc,
                     executed="",  # 新 assistant 记录，executed 初始为空，等 routes.py 来填充
+                    document_name=document_name,
                 )
 
         return response

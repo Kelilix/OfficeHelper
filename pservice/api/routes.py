@@ -25,6 +25,7 @@ from .service import word_service, llm_service
 from skills import get_skill_descriptions, get_skill_content, list_skill_names
 from .action_registry import execute_action
 
+
 # ── 全局配置：纯查询类 action 列表 ─────────────────────────────────────────
 # 这些 action 被判定为「纯查询」，用于以下场景：
 #   1. _substitute_rng_placeholder：跳过 rng 注入
@@ -68,25 +69,50 @@ QUERY_ACTIONS = frozenset([
     "get_list_level",           # 获取列表级别
 ])
 
-# ── 加载 word-text-operator skill 模块 ────────────────────────────────────────
-# 策略与 main.py 一致：用 importlib.util 逐文件加载，解决相对导入问题
-_project_root = Path(__file__).parent.parent.parent
+# ── PyInstaller 兼容：exe 模式下提取 skills 到临时目录 ──────────────────────────
+import tempfile
+import shutil
 
+def _get_bundle_root():
+    if getattr(sys, "_MEIPASS", None):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent.parent.parent
+
+def _get_extracted_root():
+    bundle_root = _get_bundle_root()
+    tmpdir = Path(tempfile.gettempdir()) / "OfficeHelperBackend"
+    tmpdir.mkdir(exist_ok=True)
+    for name in ("skills", "config.json"):
+        src = bundle_root / name
+        dst = tmpdir / name
+        if not dst.exists():
+            if src.exists() and src.is_dir():
+                shutil.copytree(src, dst)
+            elif src.exists() and src.is_file():
+                shutil.copy2(src, dst)
+    return tmpdir
+
+_is_frozen = getattr(sys, "_MEIPASS", None)
+_extracted_root = _get_extracted_root()
+
+# 仅 PyInstaller 模式（exe）下提取 bundle 到临时目录并加入 sys.path
+if _is_frozen and _extracted_root.exists() and str(_extracted_root) not in sys.path:
+    sys.path.insert(0, str(_extracted_root))
 
 def _ensure_wto_module():
-    """确保 WordTextOperator 已加载到 sys.modules。"""
     key = "scripts.word_text_operator"
     if key in sys.modules:
         return
-    scripts_dir = _project_root / "skills" / "word-text-operator" / "scripts"
-    _scripts_parent = Path(__file__).parent.parent.parent / "skills" / "word-text-operator"
-    if str(_scripts_parent) not in sys.path:
-        sys.path.insert(0, str(_scripts_parent))
-
+    scripts_dir = _extracted_root / "skills" / "word-text-operator" / "scripts"
+    if not scripts_dir.exists():
+        scripts_dir = _get_bundle_root() / "skills" / "word-text-operator" / "scripts"
+    if not scripts_dir.exists():
+        return
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
     submodules = ["word_base", "word_range_navigation", "word_text_operations",
                   "word_selection", "word_find_replace", "word_format", "word_bookmark"]
     import importlib.util
-
     for sub in submodules:
         sub_file = scripts_dir / f"{sub}.py"
         if not sub_file.exists():
@@ -103,7 +129,6 @@ def _ensure_wto_module():
             spec.loader.exec_module(mod)
         except Exception:
             pass
-
     main_file = scripts_dir / "word_text_operator.py"
     if main_file.exists():
         spec = importlib.util.spec_from_file_location(key, main_file)
@@ -121,18 +146,18 @@ from scripts.word_text_operator import WordTextOperator
 
 
 def _ensure_wpo_module():
-    """确保 PageOperator 已加载到 sys.modules。"""
     key = "scripts.word_page_operator"
     if key in sys.modules:
         return
-    scripts_dir = _project_root / "skills" / "word-page-operator" / "scripts"
-    _scripts_parent = Path(__file__).parent.parent.parent / "skills" / "word-page-operator"
-    if str(_scripts_parent) not in sys.path:
-        sys.path.insert(0, str(_scripts_parent))
-
+    scripts_dir = _extracted_root / "skills" / "word-page-operator" / "scripts"
+    if not scripts_dir.exists():
+        scripts_dir = _get_bundle_root() / "skills" / "word-page-operator" / "scripts"
+    if not scripts_dir.exists():
+        return
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
     submodules = ["word_page_operator_base", "word_section_operator"]
     import importlib.util
-
     for sub in submodules:
         sub_file = scripts_dir / f"{sub}.py"
         if not sub_file.exists():
@@ -149,7 +174,6 @@ def _ensure_wpo_module():
             spec.loader.exec_module(mod)
         except Exception:
             pass
-
     main_file = scripts_dir / "word_page_operator.py"
     if main_file.exists():
         spec = importlib.util.spec_from_file_location(key, main_file)
@@ -164,6 +188,28 @@ def _ensure_wpo_module():
 
 _ensure_wpo_module()
 from scripts.word_page_operator import PageOperator
+
+def _ensure_para_op_module():
+    key = "scripts.word_paragraph_operator"
+    if key in sys.modules:
+        return
+    import importlib.util
+    scripts_dir = _extracted_root / "skills" / "word-text-operator" / "scripts"
+    if not scripts_dir.exists():
+        scripts_dir = _get_bundle_root() / "skills" / "word-text-operator" / "scripts"
+    main_file = scripts_dir / "word_paragraph_operator.py"
+    if not main_file.exists():
+        return
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    spec = importlib.util.spec_from_file_location(key, main_file)
+    if spec is not None:
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[key] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            pass
 
 
 logger = logging.getLogger(__name__)
@@ -310,6 +356,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         llm_plan_resp = llm_service.chat_with_context(
             req.message, prompt_plan, session_id=session_id,
             add_to_history=False,
+            document_name=req.document_name,
         )
         logger.info("[/api/chat] >>> Step 4: LLM 响应已返回，长度=%d", len(llm_plan_resp))
         plan_steps = _parse_plan_select(llm_plan_resp)
@@ -326,6 +373,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 llm_sel = llm_service.chat_with_context(
                     req.message, prompt_sel, session_id=session_id,
                     add_to_history=False,
+                    document_name=req.document_name,
                 )
                 skill_to_run = _parse_skill_selection(llm_sel) or ""
             if not skill_to_run:
@@ -341,6 +389,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         para_op = None
         if op and op._base._word_app is not None:
             try:
+                _ensure_para_op_module()
                 from scripts.word_paragraph_operator import ParagraphOperator
                 para_op = ParagraphOperator(op._base)
             except Exception as e:
@@ -384,6 +433,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 llm_resp = llm_service.chat_with_context(
                     req.message, prompt_exec, session_id=session_id,
                     add_to_history=False,
+                    document_name=req.document_name,
                 )
                 logger.info("[/api/chat] >>> Step 5: step=%d LLM 响应已返回，长度=%d", step_num, len(llm_resp))
             except Exception as e:
@@ -474,6 +524,9 @@ def chat_clear(session_id: str) -> dict:
 @router.get("/word/status", response_model=WordStatusResponse)
 def word_status() -> WordStatusResponse:
     try:
+        # 未连接时自动尝试重新连接（避免前端轮询时 Word 仍处于未连接状态）
+        if not word_service.is_connected():
+            word_service.connect(visible=True)
         connected = word_service.is_connected()
         has_sel = word_service.has_selection() if connected else False
         sel_text = word_service.get_selection_text() if has_sel else ""
@@ -502,6 +555,36 @@ def word_disconnect(save: bool = False) -> dict:
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@router.get("/word/documents")
+def list_documents() -> dict:
+    """返回所有当前打开的 Word 文档列表。"""
+    try:
+        if not word_service.is_connected():
+            return {"documents": []}
+        docs = []
+        for doc in word_service._word_app.Documents:
+            try:
+                docs.append({
+                    "name": doc.Name or "",
+                    "path": getattr(doc, "Path", "") or "",
+                })
+            except Exception:
+                continue
+        return {"documents": docs}
+    except Exception as e:
+        return {"documents": [], "error": str(e)}
+
+
+@router.get("/sessions")
+def list_sessions() -> dict:
+    """返回所有会话摘要，供前端会话切换下拉框使用。"""
+    try:
+        sessions = llm_service.list_sessions()
+        return {"sessions": sessions}
+    except Exception as e:
+        return {"sessions": [], "error": str(e)}
 
 
 # ── Plan 阶段 ──────────────────────────────────────────────────────────
@@ -1059,35 +1142,13 @@ def _summarize_execution(llm_response: str, executed: List[Dict[str, Any]]) -> s
     text = re.sub(r'\[.*\]', '', llm_response, flags=re.DOTALL).strip()
     text = re.sub(r'```json|```', '', text).strip()
 
-    result_parts = []
-    for e in executed:
-        if e.get("success") and "result" in e:
-            r = e["result"]
-            if isinstance(r, str) and len(r) < 200:
-                result_parts.append(f"「{r}」")
-            elif isinstance(r, int):
-                result_parts.append(f"结果：{r}")
-            elif isinstance(r, list) and len(r) <= 5:
-                result_parts.append(f"找到 {len(r)} 项")
-            elif isinstance(r, dict) and "text" in r:
-                result_parts.append(f"「{r['text']}」")
-
     if text:
-        first_para = text.split('\n')[0].strip()
-        if result_parts:
-            return f"{first_para}。{' '.join(result_parts)}"
-        return first_para
+        return text.split('\n')[0].strip()
 
     if executed:
         ok = [e.get("description", e.get("action", "?")) for e in executed if e.get("success")]
-        failed = [e.get("action") for e in executed if not e.get("success")]
-        parts = []
         if ok:
-            parts.append(f"✅ 已执行：{', '.join(ok)}")
-        if failed:
-            parts.append(f"❌ 失败：{', '.join(failed)}")
-        if result_parts:
-            parts.append(" ".join(result_parts))
-        return " ".join(parts) if parts else "已完成处理。"
+            return f"已执行：{', '.join(ok)}"
+        return "处理完成。"
 
-    return "已完成处理。"
+    return "处理完成。"
